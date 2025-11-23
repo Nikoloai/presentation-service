@@ -753,4 +753,4 @@ if __name__ == '__main__':
     print(f"LibreTranslate enabled: {LIBRETRANSLATE_ENABLED}")
     print(f"LibreTranslate URL: {LIBRETRANSLATE_URL}")
     print(f"LibreTranslate reachable: {is_libretranslate_available()}")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=port)

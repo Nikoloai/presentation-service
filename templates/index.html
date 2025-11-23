@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Presentation Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎨 AI Presentation Generator</h1>
+            <p class="subtitle">Create beautiful presentations with AI-generated content and images</p>
+        </header>
+
+        <main>
+            <!-- Form Section -->
+            <section class="form-section" id="formSection">
+                <form id="presentationForm">
+                    <div class="form-group">
+                        <label for="topic">Presentation Topic</label>
+                        <input 
+                            type="text" 
+                            id="topic" 
+                            name="topic" 
+                            placeholder="e.g., Python for Beginners, Climate Change, Marketing Strategy"
+                            required
+                            maxlength="100"
+                        >
+                        <small>Enter a clear and specific topic</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="numSlides">Number of Slides</label>
+                        <input 
+                            type="number" 
+                            id="numSlides" 
+                            name="numSlides" 
+                            min="3" 
+                            max="10" 
+                            value="5"
+                            required
+                        >
+                        <small>Choose between 3 and 10 slides</small>
+                    </div>
+
+                    <button type="submit" class="btn-primary" id="submitBtn">
+                        <span class="btn-text">Create Presentation</span>
+                        <span class="btn-icon">✨</span>
+                    </button>
+                </form>
+            </section>
+
+            <!-- Loading Section -->
+            <section class="loading-section hidden" id="loadingSection">
+                <div class="spinner"></div>
+                <h2>Generating Your Presentation...</h2>
+                <p class="loading-text">This may take 30-60 seconds</p>
+                <div class="progress-steps">
+                    <div class="step active" id="step1">
+                        <span class="step-icon">📝</span>
+                        <span class="step-text">Generating content</span>
+                    </div>
+                    <div class="step" id="step2">
+                        <span class="step-icon">🖼️</span>
+                        <span class="step-text">Finding images</span>
+                    </div>
+                    <div class="step" id="step3">
+                        <span class="step-icon">📊</span>
+                        <span class="step-text">Creating slides</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Preview Section -->
+            <section class="preview-section hidden" id="previewSection">
+                <h2>✅ Presentation Ready!</h2>
+                <div class="preview-container">
+                    <div class="preview-info">
+                        <h3 id="previewTopic"></h3>
+                        <p id="previewSlideCount"></p>
+                    </div>
+                    
+                    <div class="slides-preview" id="slidesPreview">
+                        <!-- Slides will be dynamically inserted here -->
+                    </div>
+                    
+                    <div class="action-buttons">
+                        <button class="btn-success" id="downloadBtn">
+                            <span>📥 Download PPTX</span>
+                        </button>
+                        <button class="btn-secondary" id="createNewBtn">
+                            <span>🔄 Create New Presentation</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Error Section -->
+            <section class="error-section hidden" id="errorSection">
+                <div class="error-container">
+                    <h2>❌ Error</h2>
+                    <p id="errorMessage"></p>
+                    <button class="btn-secondary" id="tryAgainBtn">
+                        <span>🔄 Try Again</span>
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Powered by OpenAI ChatGPT & Pexels | Built with Flask & Python</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

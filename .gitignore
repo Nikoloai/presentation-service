@@ -1,0 +1,41 @@
+# Environment variables (NEVER commit these!)
+.env
+.env.local
+.env.production
+
+# Generated presentation files
+output/
+image_cache/
+*.pptx
+
+# Python cache
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.egg-info/
+dist/
+build/

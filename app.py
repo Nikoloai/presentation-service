@@ -94,20 +94,31 @@ def detect_language(text):
         return 'en'
 
 
-def generate_slide_content(topic, num_slides):
+def generate_slide_content_in_language(topic, num_slides, language='en'):
     """
-    Generate slide content using OpenAI ChatGPT API with language support
+    Generate slide content using OpenAI ChatGPT API in the specified language
     """
     try:
-        # Detect language
-        language = detect_language(topic)
-        print(f"Detected language: {'Russian' if language == 'ru' else 'English'}")
+        print(f"Generating content in language: {language}")
         
         headers = {
             'Authorization': f'Bearer {OPENAI_API_KEY}',
             'Content-Type': 'application/json'
         }
         
+        # Map language codes to full names for the prompt
+        language_names = {
+            'en': 'English',
+            'es': 'Spanish',
+            'ru': 'Russian',
+            'zh': 'Chinese',
+            'fr': 'French'
+        }
+        
+        # Get the language name for the prompt
+        language_name = language_names.get(language, 'English')
+        
+        # Create prompt based on language
         if language == 'ru':
             prompt = f"""Создай структурированную презентацию на тему: "{topic}"
 Количество слайдов: {num_slides}
@@ -157,7 +168,154 @@ def generate_slide_content(topic, num_slides):
 - НЕ используй общие фразы про "технологии", "инновации", "будущее" без конкретики
 - Заголовок и содержание слайда должны ЛОГИЧЕСКИ соответствовать друг другу
 - Каждый search_keyword должен быть РАЗНЫМ и специфичным"""
-        else:
+        elif language == 'es':
+            prompt = f"""Crea una presentación estructurada sobre el tema: "{topic}"
+Número de diapositivas: {num_slides}
+
+IMPORTANTE: La presentación debe consistir en DECLARACIONES DE TESIS, no descripciones.
+
+TESIS — una declaración clave que revela parte del tema.
+NO solo describas, formula ideas y argumentos específicos.
+
+ESTRUCTURA DE TESIS:
+- Diapositiva 1: Idea principal del tema (declaración central)
+- Diapositivas 2-{num_slides-1}: Aspectos clave, beneficios, aplicaciones
+- Diapositiva {num_slides}: Conclusión, futuro, conclusión
+
+Cada tesis debe:
+✓ Ser una declaración específica directamente relacionada con "{topic}"
+✓ Contener 2-3 oraciones precisas con DETALLES y EJEMPLOS CONCRETOS
+✓ Desarrollar el tema principal
+✓ Formar una cadena lógica con otras tesis
+✓ EVITAR frases plantilla como "tecnología clave", "era digital", "sociedad moderna"
+✓ Usar TERMINOLOGÍA ESPECÍFICA y hechos relevantes solo para "{topic}"
+
+Para cada diapositiva, devuelve JSON con campos:
+- "title": Título breve (2-3 palabras) específico para el tema
+- "search_keyword": Palabras clave para búsqueda de imágenes en inglés (3-4 palabras)
+- "content": TESIS — declaración específica (2-3 oraciones con detalles)
+
+EJEMPLO de tesis correctas para "Perros":
+{{
+  "slides": [
+    {{"title": "Evolución de los Perros", "search_keyword": "dog evolution wolf domestication", "content": "Los perros descienden de lobos aproximadamente hace 15,000 años a través de la domesticación. Las investigaciones genéticas muestran que los primeros perros aparecieron en Asia Oriental y se expandieron mundialmente con los humanos. Las razas modernas son resultado de la cría selectiva en los últimos 200 años."}},
+    {{"title": "Razas y Funciones", "search_keyword": "dog breeds working dogs types", "content": "Existen más de 400 razas de perros reconocidas, cada una criada para tareas específicas. Las razas pastoriles (Border Collies, Pastores) manejan rebaños, las de caza (Retrievers, Spaniels) asisten en la caza, mientras que las razas guardianas (Dobermans, Rottweilers) protegen propiedades. Las razas de compañía (Chihuahuas, Terriers) se crían exclusivamente para compañía."}},
+    {{"title": "Inteligencia Canina", "search_keyword": "dog intelligence training cognition", "content": "Los perros pueden memorizar hasta 165 palabras y gestos, comparable a las habilidades cognitivas de un niño de dos años. Los Border Collies se consideran la raza más inteligente, comprendiendo nuevos comandos tras solo 5 repeticiones. Las investigaciones muestran que los perros distinguen emociones humanas a través de expresiones faciales y tono de voz."}}
+  ]
+}}
+
+INCORRECTO (frases plantilla):
+"Los perros se están convirtiendo en un factor clave en la sociedad moderna. La adopción de estas tecnologías desbloquea nuevas posibilidades."
+
+CORRECTO (hechos concretos):
+"Los perros poseen un sentido del olfato 10,000 veces más agudo que los humanos debido a 300 millones de receptores olfativos. Esto les permite detectar drogas, explosivos e incluso diagnosticar cáncer en etapas tempranas."
+
+Devuelve SOLO JSON válido sin texto adicional.
+
+CRÍTICO: 
+- Cada tesis debe contener HECHOS, NÚMEROS, EJEMPLOS relacionados con "{topic}"
+- NO uses frases genéricas sobre "tecnología", "innovación", "futuro" sin especificaciones
+- El título y contenido de cada diapositiva deben estar LÓGICAMENTE conectados
+- Cada search_keyword debe ser DIFERENTE y específico"""
+        elif language == 'zh':
+            prompt = f"""创建关于主题 "{topic}" 的结构化演示文稿
+幻灯片数量: {num_slides}
+
+重要：演示文稿必须由论点陈述组成，而不是描述！
+
+论点 — 揭示主题部分内容的关键陈述。
+不要只是描述，要提出具体的想法和论据。
+
+论点结构：
+- 幻灯片 1: 主题的主要观点（核心陈述）
+- 幻灯片 2-{num_slides-1}: 关键方面、优势、应用
+- 幻灯片 {num_slides}: 结论、未来、要点
+
+每个论点必须：
+✓ 是与 "{topic}" 直接相关的具体陈述
+✓ 包含 2-3 个带有具体细节和示例的精确句子
+✓ 发展主要主题
+✓ 与其他论点形成逻辑链
+✓ 避免使用 "关键技术"、"数字时代"、"现代社会" 等模板短语
+✓ 使用仅与 "{topic}" 相关的特定术语和事实
+
+对于每张幻灯片，返回包含以下字段的 JSON：
+- "title": 简短标题（2-3 个词），针对主题
+- "search_keyword": 英文图像搜索关键词（3-4 个词）
+- "content": 论点 — 具体陈述（2-3 个带细节的句子）
+
+"狗" 的正确论点示例：
+{{
+  "slides": [
+    {{"title": "狗的进化", "search_keyword": "dog evolution wolf domestication", "content": "狗大约在 15,000 年前通过驯化从狼进化而来。基因研究表明，第一批狗出现在东亚，并随着人类传播到世界各地。现代品种是过去 200 年选择性繁殖的结果。"}},
+    {{"title": "品种和功能", "search_keyword": "dog breeds working dogs types", "content": "有超过 400 种被认可的狗品种，每种都为特定任务而培育。牧羊犬（边境牧羊犬、德国牧羊犬）管理牲畜，猎犬（寻回犬、西班牙猎犬）协助狩猎，而护卫犬（杜宾犬、罗威纳犬）保护财产。玩具犬（吉娃娃、梗犬）专门用于伴侣。"}},
+    {{"title": "犬类智力", "search_keyword": "dog intelligence training cognition", "content": "狗能记住多达 165 个单词和手势，相当于两岁儿童的认知能力。边境牧羊犬被认为是最聪明的品种，只需 5 次重复就能理解新命令。研究表明狗能通过面部表情和语调区分人类情感。"}}
+  ]
+}}
+
+错误（模板短语）：
+"狗正在成为现代社会发展的关键因素。采用这些技术开启了新的可能性。"
+
+正确（具体事实）：
+"狗的嗅觉比人类敏锐 10,000 倍，因为它们拥有 3 亿个嗅觉受体。这使它们能够检测毒品、爆炸物，甚至在早期诊断癌症。"
+
+仅返回有效的 JSON，不包含额外文本。
+
+关键：
+- 每个论点必须包含与 "{topic}" 相关的具体事实、数字、示例
+- 不要使用没有具体说明的 "技术"、"创新"、"未来" 等通用短语
+- 每张幻灯片的标题和内容必须在逻辑上相关联
+- 每个 search_keyword 必须是不同的且具体的"""
+        elif language == 'fr':
+            prompt = f"""Créez une présentation structurée sur le sujet : "{topic}"
+Nombre de diapositives : {num_slides}
+
+IMPORTANT : La présentation doit consister en des DÉCLARATIONS DE THÈSE, pas des descriptions.
+
+THÈSE — une déclaration clé qui révèle une partie du sujet.
+Ne décrivez pas seulement, formulez des idées et arguments spécifiques.
+
+STRUCTURE DES THÈSES :
+- Diapositive 1 : Idée principale du sujet (déclaration centrale)
+- Diapositives 2-{num_slides-1} : Aspects clés, avantages, applications
+- Diapositive {num_slides} : Conclusion, avenir, point de vue
+
+Chaque thèse doit :
+✓ Être une déclaration spécifique directement liée à "{topic}"
+✓ Contenir 2-3 phrases précises avec des DÉTAILS et EXEMPLES CONCRETS
+✓ Développer le sujet principal
+✓ Former une chaîne logique avec les autres thèses
+✓ ÉVITER les phrases modèles comme "technologie clé", "ère numérique", "société moderne"
+✓ Utiliser une TERMINOLOGIE SPÉCIFIQUE et des faits pertinents uniquement pour "{topic}"
+
+Pour chaque diapositive, retournez JSON avec les champs :
+- "title" : Titre bref (2-3 mots) spécifique au sujet
+- "search_keyword" : Mots-clés pour recherche d'images en anglais (3-4 mots)
+- "content" : THÈSE — déclaration spécifique (2-3 phrases avec détails)
+
+EXEMPLE de thèses correctes pour "Chiens" :
+{{
+  "slides": [
+    {{"title": "Évolution des Chiens", "search_keyword": "dog evolution wolf domestication", "content": "Les chiens descendent des loups il y a environ 15 000 ans par domestication. Les recherches génétiques montrent que les premiers chiens sont apparus en Asie de l'Est et se sont répandus dans le monde avec les humains. Les races modernes sont le résultat de l'élevage sélectif au cours des 200 dernières années."}},
+    {{"title": "Races et Fonctions", "search_keyword": "dog breeds working dogs types", "content": "Plus de 400 races de chiens reconnues existent, chacune élevée pour des tâches spécifiques. Les races de berger (Border Collies, Bergers) gèrent les troupeaux, les races de chasse (Retrievers, Épagneuls) aident à la chasse, tandis que les races de garde (Dobermans, Rottweilers) protègent les propriétés. Les races de compagnie (Chihuahuas, Terriers) sont élevées exclusivement pour la compagnie."}},
+    {{"title": "Intelligence Canine", "search_keyword": "dog intelligence training cognition", "content": "Les chiens peuvent mémoriser jusqu'à 165 mots et gestes, comparable aux capacités cognitives d'un enfant de deux ans. Les Border Collies sont considérés comme la race la plus intelligente, comprenant de nouvelles commandes après seulement 5 répétitions. Les recherches montrent que les chiens distinguent les émotions humaines par les expressions faciales et le ton de la voix."}}
+  ]
+}}
+
+INCORRECT (phrases modèles) :
+"Les chiens deviennent un facteur clé dans la société moderne. L'adoption de ces technologies débloque de nouvelles possibilités."
+
+CORRECT (faits concrets) :
+"Les chiens possèdent un sens de l'odorat 10 000 fois plus aigu que les humains grâce à 300 millions de récepteurs olfactifs. Cela leur permet de détecter des drogues, des explosifs et même de diagnostiquer le cancer à un stade précoce."
+
+Retournez SEULEMENT du JSON valide sans texte supplémentaire.
+
+CRITIQUE : 
+- Chaque thèse doit contenir des FAITS CONCRETS, des NOMBRES, des EXEMPLES liés à "{topic}"
+- N'utilisez PAS de phrases génériques sur "technologie", "innovation", "avenir" sans précisions
+- Le titre et le contenu de chaque diapositive doivent être LIÉS LOGIQUEMENT
+- Chaque search_keyword doit être DIFFÉRENT et spécifique"""
+        else:  # Default to English
             prompt = f"""Create a structured presentation on the topic: "{topic}"
 Number of slides: {num_slides}
 
@@ -210,7 +368,7 @@ CRITICAL:
         data = {
             'model': 'gpt-3.5-turbo',
             'messages': [
-                {'role': 'system', 'content': 'You are a helpful presentation creator. Always respond with valid JSON only.'},
+                {'role': 'system', 'content': f'You are a helpful presentation creator. Always respond with valid JSON only. Generate content in {language_name} language.'},
                 {'role': 'user', 'content': prompt}
             ],
             'temperature': 0.7,
@@ -252,13 +410,13 @@ CRITICAL:
         return None
 
 
-def create_fallback_slides(topic, num_slides):
+def create_fallback_slides(topic, num_slides, language='en'):
     """
     Create fallback slides if API fails with language support
     """
-    language = detect_language(topic)
     slides = []
     
+    # Language-specific fallback content
     if language == 'ru':
         slides.append({
             'title': f'{topic} изменяет мир',
@@ -266,36 +424,102 @@ def create_fallback_slides(topic, num_slides):
             'content': f'{topic} становится ключевым фактором развития современного общества. Внедрение этих технологий открывает новые возможности для бизнеса и повседневной жизни. Понимание {topic} критически важно для успеха в цифровую эпоху.'
         })
         
-        thesis_templates_ru = [
+        thesis_templates = [
             ('Ключевые преимущества', 'key benefits advantages', lambda t: f'{t} повышает эффективность работы и снижает издержки. Автоматизация процессов позволяет сосредоточиться на стратегических задачах. Компании, внедрившие {t}, получают конкурентное преимущество на рынке.'),
             ('Практическое применение', 'real world practical use', lambda t: f'Реальные кейсы показывают эффективность {t} в различных отраслях. От медицины до финансов, технология решает сложные задачи. Успешные примеры вдохновляют на дальнейшее внедрение.'),
             ('Вызовы и решения', 'challenges solutions problems', lambda t: f'Основные препятствия при внедрении {t} включают технические и организационные барьеры. Однако современные подходы позволяют эффективно преодолевать эти трудности. Правильная стратегия минимизирует риски и ускоряет адаптацию.'),
             ('Будущее технологии', 'future innovation development', lambda t: f'{t} будет играть всё более важную роль в ближайшие годы. Инвестиции в развитие этой области растут экспоненциально. Те, кто освоит {t} сегодня, станут лидерами завтрашнего дня.')
         ]
         
-        for i in range(1, min(num_slides, len(thesis_templates_ru) + 1)):
-            title, keywords, content_func = thesis_templates_ru[i - 1]
+        for i in range(1, min(num_slides, len(thesis_templates) + 1)):
+            title, keywords, content_func = thesis_templates[i - 1]
             slides.append({
                 'title': title,
                 'search_keyword': f'{topic} {keywords}',
                 'content': content_func(topic)
             })
-    else:
+            
+    elif language == 'es':
+        slides.append({
+            'title': f'{topic} Revoluciona',
+            'search_keyword': f'{topic} innovacion futuro tecnologia',
+            'content': f'{topic} está redefiniendo cómo abordamos los desafíos y oportunidades modernos. La adopción de estas tecnologías desbloquea nuevo potencial para negocios y vida diaria. Dominar {topic} es fundamental para el éxito en la era digital.'
+        })
+        
+        thesis_templates = [
+            ('Ventajas Clave', 'ventajas beneficios clave', lambda t: f'{t} mejora drásticamente la eficiencia mientras reduce costos operativos. La automatización permite a los equipos enfocarse en iniciativas estratégicas en lugar de tareas rutinarias. Las organizaciones que implementan {t} obtienen ventajas competitivas significativas en sus mercados.'),
+            ('Impacto en el Mundo Real', 'impacto aplicaciones practicas', lambda t: f'Las historias de éxito demuestran la efectividad de {t} en diversas industrias. Desde la salud hasta las finanzas, la tecnología resuelve problemas anteriormente intratables. Estos ejemplos probados inspiran mayor adopción e innovación.'),
+            ('Superando Desafíos', 'desafios soluciones problemas', lambda t: f'Los obstáculos principales para la adopción de {t} incluyen complejidad técnica y resistencia organizacional. Los marcos y metodologías modernos abordan efectivamente estas barreras. La planificación estratégica minimiza riesgos y acelera la implementación exitosa.'),
+            ('Perspectiva Futura', 'futuro innovacion desarrollo', lambda t: f'{t} jugará un papel cada vez más vital en dar forma al mañana. La inversión en este campo crece exponencialmente año tras año. Los primeros adoptantes de {t} se posicionan como líderes del futuro.')
+        ]
+        
+        for i in range(1, min(num_slides, len(thesis_templates) + 1)):
+            title, keywords, content_func = thesis_templates[i - 1]
+            slides.append({
+                'title': title,
+                'search_keyword': f'{topic} {keywords}',
+                'content': content_func(topic)
+            })
+            
+    elif language == 'zh':
+        slides.append({
+            'title': f'{topic} 革命',
+            'search_keyword': f'{topic} innovation future technology',
+            'content': f'{topic} 正在重塑我们应对现代挑战和机遇的方式。采用这些技术为业务和日常生活开启了新的可能性。掌握 {topic} 对于数字时代的成功至关重要。'
+        })
+        
+        thesis_templates = [
+            ('关键优势', 'key benefits advantages', lambda t: f'{t} 显著提高效率同时降低运营成本。自动化使团队能够专注于战略举措而非日常任务。实施 {t} 的组织在其市场中获得显著的竞争优势。'),
+            ('现实世界影响', 'real world practical applications', lambda t: f'成功案例证明了 {t} 在不同行业的有效性。从医疗保健到金融，该技术解决了以前难以解决的问题。这些经过验证的例子激励着进一步的采用和创新。'),
+            ('克服挑战', 'challenges solutions problems', lambda t: f'{t} 采用的主要障碍包括技术复杂性和组织阻力。现代框架和方法有效地解决了这些障碍。战略规划将风险降至最低并加速成功实施。'),
+            ('未来展望', 'future innovation development', lambda t: f'{t} 将在塑造未来中发挥越来越重要的作用。该领域的投资正在逐年指数级增长。早期采用 {t} 的人将自己定位为未来的领导者。')
+        ]
+        
+        for i in range(1, min(num_slides, len(thesis_templates) + 1)):
+            title, keywords, content_func = thesis_templates[i - 1]
+            slides.append({
+                'title': title,
+                'search_keyword': f'{topic} {keywords}',
+                'content': content_func(topic)
+            })
+            
+    elif language == 'fr':
+        slides.append({
+            'title': f'{topic} Révolution',
+            'search_keyword': f'{topic} innovation future technologie',
+            'content': f'{topic} redéfinit comment nous abordons les défis et opportunités modernes. L\'adoption de ces technologies débloque de nouvelles possibilités pour les entreprises et la vie quotidienne. Maîtriser {topic} est essentiel pour réussir à l\'ère numérique.'
+        })
+        
+        thesis_templates = [
+            ('Avantages Clés', 'avantages bénéfices clés', lambda t: f'{t} améliore drastiquement l\'efficacité tout en réduisant les coûts opérationnels. L\'automatisation permet aux équipes de se concentrer sur des initiatives stratégiques au lieu de tâches routinières. Les organisations implémentant {t} gagnent des avantages compétitifs significatifs sur leurs marchés.'),
+            ('Impact Réel', 'impact applications pratiques', lambda t: f'Les histoires de réussite démontrent l\'efficacité de {t} dans diverses industries. De la santé aux finances, la technologie résout des problèmes auparavant intractables. Ces exemples éprouvés inspirent une adoption et une innovation supplémentaires.'),
+            ('Surmonter les Défis', 'défis solutions problèmes', lambda t: f'Les obstacles principaux à l\'adoption de {t} incluent la complexité technique et la résistance organisationnelle. Les cadres et méthodologies modernes traitent efficacement ces barrières. La planification stratégique minimise les risques et accélère l\'implémentation réussie.'),
+            ('Aperçu Futur', 'futur innovation développement', lambda t: f'{t} jouera un rôle de plus en plus vital dans façonner demain. L\'investissement dans ce domaine croît exponentiellement année après année. Les premiers adoptants de {t} se positionnent comme les leaders de l\'avenir.')
+        ]
+        
+        for i in range(1, min(num_slides, len(thesis_templates) + 1)):
+            title, keywords, content_func = thesis_templates[i - 1]
+            slides.append({
+                'title': title,
+                'search_keyword': f'{topic} {keywords}',
+                'content': content_func(topic)
+            })
+    else:  # Default to English
         slides.append({
             'title': f'{topic} Revolution',
             'search_keyword': f'{topic} innovation future technology',
             'content': f'{topic} is reshaping how we approach modern challenges and opportunities. The adoption of these technologies unlocks new potential for businesses and daily life. Mastering {topic} is critical for success in the digital age.'
         })
         
-        thesis_templates_en = [
+        thesis_templates = [
             ('Key Advantages', 'key benefits advantages', lambda t: f'{t} dramatically improves efficiency while reducing operational costs. Automation enables teams to focus on strategic initiatives instead of routine tasks. Organizations implementing {t} gain significant competitive advantages in their markets.'),
             ('Real-World Impact', 'real world practical applications', lambda t: f'Success stories demonstrate the effectiveness of {t} across diverse industries. From healthcare to finance, the technology solves previously intractable problems. These proven examples inspire further adoption and innovation.'),
             ('Overcoming Challenges', 'challenges solutions problems', lambda t: f'Primary obstacles to {t} adoption include technical complexity and organizational resistance. Modern frameworks and methodologies effectively address these barriers. Strategic planning minimizes risks and accelerates successful implementation.'),
             ('Future Outlook', 'future innovation development', lambda t: f'{t} will play an increasingly vital role in shaping tomorrow. Investment in this field is growing exponentially year over year. Early adopters of {t} position themselves as leaders of the future.')
         ]
         
-        for i in range(1, min(num_slides, len(thesis_templates_en) + 1)):
-            title, keywords, content_func = thesis_templates_en[i - 1]
+        for i in range(1, min(num_slides, len(thesis_templates) + 1)):
+            title, keywords, content_func = thesis_templates[i - 1]
             slides.append({
                 'title': title,
                 'search_keyword': f'{topic} {keywords}',
@@ -674,6 +898,7 @@ def create_presentation_api():
         data = request.json
         topic = data.get('topic', '').strip()
         num_slides = data.get('num_slides', 5)
+        language = data.get('language', 'en')  # Get language from frontend
         
         # Validation
         if not topic:
@@ -689,12 +914,16 @@ def create_presentation_api():
         if not PEXELS_API_KEY:
             return jsonify({'error': 'Pexels API key not configured'}), 500
         
-        # Generate slide content
-        print(f"Generating content for topic: {topic}, slides: {num_slides}")
-        slides_data = generate_slide_content(topic, num_slides)
+        # Generate slide content in the selected language
+        print(f"Generating content for topic: {topic}, slides: {num_slides}, language: {language}")
+        slides_data = generate_slide_content_in_language(topic, num_slides, language)
         
         if not slides_data:
-            return jsonify({'error': 'Failed to generate slide content via OpenAI'}), 502
+            # Use fallback slides in the selected language
+            print("Using fallback slides in selected language")
+            slides_data = create_fallback_slides(topic, num_slides, language)
+            if not slides_data:
+                return jsonify({'error': 'Failed to generate slide content'}), 502
         
         # Ensure we have the right number of slides
         slides_data = slides_data[:num_slides]

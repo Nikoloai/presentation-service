@@ -183,7 +183,8 @@ async function createPresentation(topic, numSlides) {
             },
             body: JSON.stringify({
                 topic: topic,
-                num_slides: numSlides
+                num_slides: numSlides,
+                language: currentLanguage  // Send selected language to backend
             })
         });
         

@@ -3,8 +3,12 @@ import json
 import requests
 import re
 import hashlib
-from flask import Flask, render_template, request, jsonify, send_file
+import sqlite3
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash
 from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -21,6 +25,13 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
+app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
+
+# Initialize Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'admin_login'
+login_manager.login_message = 'Please log in to access this page.'
 
 # API Keys from environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -37,6 +48,129 @@ if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 if not os.path.exists(IMAGE_CACHE_DIR):
     os.makedirs(IMAGE_CACHE_DIR)
+
+# Initialize SQLite database for users
+DB_PATH = 'users.db'
+
+def init_db():
+    """Initialize the database with users table"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Create users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            status TEXT DEFAULT 'active',
+            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create presentations table to track user activity
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS presentations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            topic TEXT NOT NULL,
+            num_slides INTEGER,
+            filename TEXT,
+            creation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# Initialize database on startup
+init_db()
+
+# User management functions
+def get_all_users():
+    """Get all users from the database"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row  # This allows us to access columns by name
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, email, status, registration_date FROM users ORDER BY registration_date DESC')
+        users = cursor.fetchall()
+        conn.close()
+        return [dict(user) for user in users]
+    except Exception as e:
+        print(f"Error fetching users: {e}")
+        return []
+
+def get_user_by_id(user_id):
+    """Get a specific user by ID"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, email, status, registration_date FROM users WHERE id = ?', (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        return dict(user) if user else None
+    except Exception as e:
+        print(f"Error fetching user: {e}")
+        return None
+
+def delete_user(user_id):
+    """Delete a user from the database"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # First delete user's presentations
+        cursor.execute('DELETE FROM presentations WHERE user_id = ?', (user_id,))
+        
+        # Then delete the user
+        cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error deleting user: {e}")
+        return False
+
+def update_user_status(user_id, status):
+    """Update a user's status"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET status = ? WHERE id = ?', (status, user_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error updating user status: {e}")
+        return False
+
+# Simple admin user storage (in production, use a proper database)
+# For now, we'll use a static dictionary with a hashed password
+ADMIN_USERS = {
+    'admin': {
+        'password_hash': generate_password_hash(os.getenv('ADMIN_PASSWORD', 'admin123')),
+        'id': 'admin'
+    }
+}
+
+# User class for Flask-Login
+class User(UserMixin):
+    def __init__(self, user_id):
+        self.id = user_id
+
+@login_manager.user_loader
+def load_user(user_id):
+    if user_id in ADMIN_USERS:
+        return User(user_id)
+    return None
+
+# Check if current user is admin
+def is_admin():
+    return current_user.is_authenticated and current_user.id == 'admin'
 
 
 def translate_keyword_to_english(keyword, topic):
@@ -282,7 +416,7 @@ STRUCTURE DES THÈSES :
 
 Chaque thèse doit :
 ✓ Être une déclaration spécifique directement liée à "{topic}"
-✓ Contenir 2-3 phrases précises avec des DÉTAILS et EXEMPLES CONCRETS
+✓ Contenir 2-3 phrases précises avec des DÉTAILS et EXEMPLES CONCRÉTS
 ✓ Développer le sujet principal
 ✓ Former une chaîne logique avec les autres thèses
 ✓ ÉVITER les phrases modèles comme "technologie clé", "ère numérique", "société moderne"
@@ -311,7 +445,7 @@ CORRECT (faits concrets) :
 Retournez SEULEMENT du JSON valide sans texte supplémentaire.
 
 CRITIQUE : 
-- Chaque thèse doit contenir des FAITS CONCRETS, des NOMBRES, des EXEMPLES liés à "{topic}"
+- Chaque thèse doit contenir des FAITS CONCRÉTS, des NOMBRES, des EXEMPLES liés à "{topic}"
 - N'utilisez PAS de phrases génériques sur "technologie", "innovation", "avenir" sans précisions
 - Le titre et le contenu de chaque diapositive doivent être LIÉS LOGIQUEMENT
 - Chaque search_keyword doit être DIFFÉRENT et spécifique"""
@@ -735,14 +869,142 @@ def calculate_title_font_size(text, max_width_inches=8.5, bold=True):
     return 24
 
 
-def create_presentation(topic, slides_data):
+# Theme color configurations for presentations
+PRESENTATION_THEMES = {
+    'light': {
+        'background': RGBColor(245, 245, 250),
+        'title_slide_bg': RGBColor(15, 25, 45),
+        'content_slide_bg': RGBColor(245, 245, 250),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(30, 60, 120),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(40, 40, 40),
+        'accent_color': RGBColor(30, 60, 180)
+    },
+    'dark': {
+        'background': RGBColor(30, 30, 30),
+        'title_slide_bg': RGBColor(15, 15, 25),
+        'content_slide_bg': RGBColor(30, 30, 30),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(187, 134, 252),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(224, 224, 224),
+        'accent_color': RGBColor(3, 218, 198)
+    },
+    'modern': {
+        'background': RGBColor(250, 250, 250),
+        'title_slide_bg': RGBColor(30, 30, 50),
+        'content_slide_bg': RGBColor(250, 250, 250),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(79, 70, 229),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(15, 23, 42),
+        'accent_color': RGBColor(124, 58, 237)
+    },
+    'casual': {
+        'background': RGBColor(255, 245, 247),
+        'title_slide_bg': RGBColor(76, 69, 105),
+        'content_slide_bg': RGBColor(255, 245, 247),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(255, 107, 157),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(51, 51, 51),
+        'accent_color': RGBColor(255, 160, 122)
+    },
+    'classic': {
+        'background': RGBColor(236, 240, 241),
+        'title_slide_bg': RGBColor(28, 38, 50),
+        'content_slide_bg': RGBColor(236, 240, 241),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(44, 62, 80),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(44, 62, 80),
+        'accent_color': RGBColor(52, 73, 94)
+    },
+    'futuristic': {
+        'background': RGBColor(10, 14, 39),
+        'title_slide_bg': RGBColor(10, 14, 39),
+        'content_slide_bg': RGBColor(10, 14, 39),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(0, 212, 255),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(255, 255, 255),
+        'accent_color': RGBColor(255, 0, 255)
+    },
+    'minimal': {
+        'background': RGBColor(255, 255, 255),
+        'title_slide_bg': RGBColor(0, 0, 0),
+        'content_slide_bg': RGBColor(255, 255, 255),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(0, 0, 0),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(0, 0, 0),
+        'accent_color': RGBColor(102, 102, 102)
+    },
+    'gradient': {
+        'background': RGBColor(254, 249, 255),
+        'title_slide_bg': RGBColor(79, 30, 85),
+        'content_slide_bg': RGBColor(254, 249, 255),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(240, 147, 251),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(51, 51, 51),
+        'accent_color': RGBColor(79, 172, 254)
+    },
+    'glassmorphism': {
+        'background': RGBColor(102, 126, 234),
+        'title_slide_bg': RGBColor(26, 30, 74),
+        'content_slide_bg': RGBColor(102, 126, 234),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(255, 255, 255),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(255, 255, 255),
+        'accent_color': RGBColor(255, 255, 255)
+    },
+    'nature': {
+        'background': RGBColor(241, 250, 238),
+        'title_slide_bg': RGBColor(29, 67, 50),
+        'content_slide_bg': RGBColor(241, 250, 238),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(45, 106, 79),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(27, 67, 50),
+        'accent_color': RGBColor(82, 183, 136)
+    },
+    'vivid': {
+        'background': RGBColor(255, 252, 242),
+        'title_slide_bg': RGBColor(33, 5, 17),
+        'content_slide_bg': RGBColor(255, 252, 242),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(255, 0, 110),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(33, 37, 41),
+        'accent_color': RGBColor(251, 86, 7)
+    },
+    'business': {
+        'background': RGBColor(248, 250, 252),
+        'title_slide_bg': RGBColor(15, 25, 50),
+        'content_slide_bg': RGBColor(248, 250, 252),
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(30, 58, 138),
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(15, 23, 42),
+        'accent_color': RGBColor(14, 165, 233)
+    }
+}
+
+def create_presentation(topic, slides_data, theme='light'):
     """
     Create PowerPoint presentation with text and images
     """
     print(f"\n{'#'*60}")
     print(f"# Creating presentation: {topic}")
     print(f"# Total slides: {len(slides_data)}")
+    print(f"# Theme: {theme}")
     print(f"{'#'*60}\n")
+    
+    # Get theme configuration
+    theme_config = PRESENTATION_THEMES.get(theme, PRESENTATION_THEMES['light'])
     
     # Create presentation object
     prs = Presentation()
@@ -757,11 +1019,18 @@ def create_presentation(topic, slides_data):
         blank_layout = prs.slide_layouts[6]  # Blank layout
         slide = prs.slides.add_slide(blank_layout)
         
-        # Set background color
+        # Set background color based on theme
         background = slide.background
         fill = background.fill
         fill.solid()
-        fill.fore_color.rgb = RGBColor(245, 245, 250)
+        
+        is_title_slide = (idx == 0)
+        is_last_slide = (idx == len(slides_data) - 1)
+        
+        if is_title_slide or is_last_slide:
+            fill.fore_color.rgb = theme_config['title_slide_bg']
+        else:
+            fill.fore_color.rgb = theme_config['content_slide_bg']
         
         # Add title
         title_box = slide.shapes.add_textbox(
@@ -775,9 +1044,6 @@ def create_presentation(topic, slides_data):
         title_para = title_frame.paragraphs[0]
         title_para.alignment = PP_ALIGN.CENTER
         
-        is_title_slide = (idx == 0)
-        is_last_slide = (idx == len(slides_data) - 1)
-        
         # Calculate optimal font size to fit title in one line
         optimal_font_size = calculate_title_font_size(
             text=slide_data['title'],
@@ -786,32 +1052,21 @@ def create_presentation(topic, slides_data):
         )
         
         if is_title_slide or is_last_slide:
-            # Dark background
-            background = slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = RGBColor(15, 25, 45)
-            
             title_para.font.size = Pt(optimal_font_size)
             title_para.font.bold = True
-            title_para.font.color.rgb = RGBColor(255, 255, 255)
+            title_para.font.color.rgb = theme_config['title_color_first_last']
         else:
-            # Light background with blue vertical bar
-            background = slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = RGBColor(245, 245, 250)
-            
             title_para.font.size = Pt(optimal_font_size)
             title_para.font.bold = True
-            title_para.font.color.rgb = RGBColor(30, 60, 120)
-            
-            # Left vertical blue line
+            title_para.font.color.rgb = theme_config['title_color_content']
+        
+        # Add accent element for content slides based on theme
+        if not (is_title_slide or is_last_slide):
             try:
                 slide.shapes.add_shape(
                     MSO_AUTO_SHAPE_TYPE.RECTANGLE,
                     Inches(0.3), Inches(0.3), Inches(0.1), Inches(5.0)
-                ).fill.fore_color.rgb = RGBColor(30, 60, 180)
+                ).fill.fore_color.rgb = theme_config['accent_color']
             except Exception as e:
                 print(f"  ⚠ Failed to add left bar: {e}")
         
@@ -854,10 +1109,13 @@ def create_presentation(topic, slides_data):
         content_frame.word_wrap = True
         content_frame.text = slide_data['content']
         
-        # Format content text
+        # Format content text based on theme
         for paragraph in content_frame.paragraphs:
             paragraph.font.size = Pt(16 if not (is_title_slide or is_last_slide) else 20)
-            paragraph.font.color.rgb = RGBColor(40, 40, 40) if not (is_title_slide or is_last_slide) else RGBColor(255, 255, 255)
+            if is_title_slide or is_last_slide:
+                paragraph.font.color.rgb = theme_config['content_color_first_last']
+            else:
+                paragraph.font.color.rgb = theme_config['content_color_content']
             paragraph.space_after = Pt(10)
             paragraph.line_spacing = 1.2
         
@@ -899,6 +1157,7 @@ def create_presentation_api():
         topic = data.get('topic', '').strip()
         num_slides = data.get('num_slides', 5)
         language = data.get('language', 'en')  # Get language from frontend
+        theme = data.get('theme', 'light')  # Get theme from frontend
         
         # Validation
         if not topic:
@@ -928,9 +1187,9 @@ def create_presentation_api():
         # Ensure we have the right number of slides
         slides_data = slides_data[:num_slides]
         
-        # Create presentation
-        print("Creating presentation...")
-        filepath = create_presentation(topic, slides_data)
+        # Create presentation with the selected theme
+        print("Creating presentation with theme:", theme)
+        filepath = create_presentation(topic, slides_data, theme)
         
         return jsonify({
             'success': True,
@@ -985,3 +1244,78 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting on port: {port}")
     app.run(debug=False, host='0.0.0.0', port=port)
+
+# Admin routes
+@app.route('/admin')
+@login_required
+def admin_dashboard():
+    """Admin dashboard - only accessible to authenticated admins"""
+    if not is_admin():
+        flash('Access denied. Administrator privileges required.', 'error')
+        return redirect(url_for('admin_login'))
+    return render_template('admin/dashboard.html')
+@app.route('/admin/login')
+def admin_login():
+    return render_template('admin/login.html')
+
+@app.route('/admin/users', methods=['GET', 'POST'])
+@login_required
+def admin_users():
+    """Admin users management page - only accessible to authenticated admins"""
+    if not is_admin():
+        flash('Access denied. Administrator privileges required.', 'error')
+        return redirect(url_for('admin_login'))
+    
+    # Handle POST requests for user actions
+    if request.method == 'POST':
+        action = request.form.get('action')
+        user_id = request.form.get('user_id')
+        
+        if action == 'delete_user' and user_id:
+            # Delete user
+            if delete_user(user_id):
+                flash('User deleted successfully.', 'success')
+            else:
+                flash('Error deleting user.', 'error')
+        elif action == 'update_status' and user_id:
+            # Update user status
+            status = request.form.get('status')
+            if status in ['active', 'blocked']:
+                if update_user_status(user_id, status):
+                    flash('User status updated successfully.', 'success')
+                else:
+                    flash('Error updating user status.', 'error')
+            else:
+                flash('Invalid status.', 'error')
+        
+        return redirect(url_for('admin_users'))
+    
+    # GET request - display all users
+    users = get_all_users()
+    return render_template('admin/users.html', users=users)
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    """Admin login page"""
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        # Check if user exists and password is correct
+        if username in ADMIN_USERS and check_password_hash(ADMIN_USERS[username]['password_hash'], password):
+            user = User(username)
+            login_user(user)
+            flash('Logged in successfully.', 'success')
+            return redirect(url_for('admin_dashboard'))
+        else:
+            flash('Invalid username or password.', 'error')
+    
+    return render_template('admin/login.html')
+
+@app.route('/admin/logout')
+@login_required
+def admin_logout():
+    """Admin logout"""
+    logout_user()
+    flash('You have been logged out.', 'success')
+    return redirect(url_for('admin_login'))

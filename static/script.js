@@ -148,6 +148,7 @@ presentationForm.addEventListener('submit', async (e) => {
     
     const topic = topicInput.value.trim();
     const numSlides = parseInt(numSlidesInput.value);
+    const presentationTheme = document.getElementById('presentationTheme').value; // Get selected theme
     
     // Validation
     if (!topic) {
@@ -161,11 +162,11 @@ presentationForm.addEventListener('submit', async (e) => {
     }
     
     // Start presentation creation
-    createPresentation(topic, numSlides);
+    createPresentation(topic, numSlides, presentationTheme);
 });
 
 // Create presentation function
-async function createPresentation(topic, numSlides) {
+async function createPresentation(topic, numSlides, theme) {
     // Show loading section
     formSection.classList.add('hidden');
     errorSection.classList.add('hidden');
@@ -184,7 +185,8 @@ async function createPresentation(topic, numSlides) {
             body: JSON.stringify({
                 topic: topic,
                 num_slides: numSlides,
-                language: currentLanguage  // Send selected language to backend
+                language: currentLanguage,  // Send selected language to backend
+                theme: theme  // Send selected presentation theme to backend
             })
         });
         

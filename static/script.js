@@ -244,7 +244,30 @@ function showPreview(topic, slides) {
         slideTitle.textContent = `${t('slidePrefix')} ${index + 1}: ${slide.title}`;
         
         const slideContent = document.createElement('p');
-        slideContent.textContent = slide.content;
+        let content = slide.content;
+        
+        // Limit content length to 300 characters
+        const MAX_CONTENT_LENGTH = 300;
+        if (content.length > MAX_CONTENT_LENGTH) {
+            content = content.substring(0, MAX_CONTENT_LENGTH) + '...';
+            
+            // Add warning indicator
+            const warningText = document.createElement('small');
+            warningText.style.color = 'var(--color-error)';
+            warningText.style.display = 'block';
+            warningText.style.marginTop = '5px';
+            warningText.textContent = '⚠️ Content truncated for display';
+            slideItem.appendChild(warningText);
+        }
+        
+        slideContent.textContent = content;
+        
+        // Dynamic font size adjustment based on content length
+        if (content.length > 200) {
+            slideContent.style.fontSize = '0.9em';
+        } else if (content.length > 150) {
+            slideContent.style.fontSize = '0.95em';
+        }
         
         slideItem.appendChild(slideTitle);
         slideItem.appendChild(slideContent);

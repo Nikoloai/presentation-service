@@ -105,6 +105,24 @@ def init_db():
 # Initialize database on startup
 init_db()
 
+def limit_slide_content(content, max_length=300):
+    """Limit slide content to maximum character length"""
+    if len(content) <= max_length:
+        return content
+    # Truncate at the last sentence before max_length
+    truncated = content[:max_length]
+    last_period = truncated.rfind('.')
+    last_exclamation = truncated.rfind('!')
+    last_question = truncated.rfind('?')
+    
+    last_sentence_end = max(last_period, last_exclamation, last_question)
+    
+    if last_sentence_end > max_length * 0.7:  # At least 70% of content
+        return content[:last_sentence_end + 1]
+    else:
+        # Just truncate and add ellipsis
+        return truncated.rstrip() + '...'
+
 # User management functions
 def get_all_users():
     """Get all users from the database"""
@@ -1281,17 +1299,27 @@ def create_presentation(topic, slides_data, theme='light'):
             print(f"  ⚠ Continuing without image (no unique image found)")
         
         # Add content text (description)
+        content_text = limit_slide_content(slide_data['content'], max_length=300)
         content_box = slide.shapes.add_textbox(
             Inches(0.5), Inches(1.4),
             Inches(4.8), Inches(3.6)
         )
         content_frame = content_box.text_frame
         content_frame.word_wrap = True
-        content_frame.text = slide_data['content']
+        content_frame.text = content_text
         
         # Format content text based on theme
+        # Dynamic font size based on content length
+        content_length = len(content_text)
+        if content_length > 250:
+            base_font_size = 14
+        elif content_length > 180:
+            base_font_size = 15
+        else:
+            base_font_size = 16
+        
         for paragraph in content_frame.paragraphs:
-            paragraph.font.size = Pt(16 if not (is_title_slide or is_last_slide) else 20)
+            paragraph.font.size = Pt(base_font_size if not (is_title_slide or is_last_slide) else 20)
             if is_title_slide or is_last_slide:
                 paragraph.font.color.rgb = theme_config['content_color_first_last']
             else:

@@ -1442,17 +1442,6 @@ def download_presentation(filename):
         return jsonify({'error': str(e)}), 500
 
 
-if __name__ == '__main__':
-    print("Starting Presentation Service...")
-    print(f"OpenAI API Key configured: {bool(OPENAI_API_KEY)}")
-    print(f"Pexels API Key configured: {bool(PEXELS_API_KEY)}")
-    print(f"LibreTranslate enabled: {LIBRETRANSLATE_ENABLED}")
-    print(f"LibreTranslate URL: {LIBRETRANSLATE_URL}")
-    print(f"LibreTranslate reachable: {is_libretranslate_available()}")
-    port = int(os.environ.get("PORT", 5000))
-    print(f"Starting on port: {port}")
-    app.run(debug=False, host='0.0.0.0', port=port)
-
 # Admin routes
 @app.route('/admin')
 @login_required
@@ -1925,3 +1914,16 @@ def admin_logout():
     logout_user()
     flash('You have been logged out.', 'success')
     return redirect(url_for('admin_login'))
+
+
+# Application entry point - MUST BE AT THE END OF FILE
+if __name__ == '__main__':
+    print("Starting Presentation Service...")
+    print(f"OpenAI API Key configured: {bool(OPENAI_API_KEY)}")
+    print(f"Pexels API Key configured: {bool(PEXELS_API_KEY)}")
+    print(f"LibreTranslate enabled: {LIBRETRANSLATE_ENABLED}")
+    print(f"LibreTranslate URL: {LIBRETRANSLATE_URL}")
+    print(f"LibreTranslate reachable: {is_libretranslate_available()}")
+    port = int(os.environ.get("PORT", 5000))
+    print(f"Starting on port: {port}")
+    app.run(debug=False, host='0.0.0.0', port=port)

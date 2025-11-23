@@ -23,12 +23,14 @@ const tryAgainBtn = document.getElementById('tryAgainBtn');
 
 const errorMessage = document.getElementById('errorMessage');
 const languageSelect = document.getElementById('languageSelect');
+const themeSelect = document.getElementById('themeSelect');
 const htmlRoot = document.getElementById('htmlRoot');
 
 // Global variables
 let currentFilename = null;
 let progressInterval = null;
 let currentLanguage = 'en';
+let currentTheme = 'light';
 
 // Language management
 function initLanguage() {
@@ -67,8 +69,21 @@ function applyTranslations(lang) {
         }
     });
     
+    // Update theme names in dropdown
+    updateThemeDropdown(lang);
+    
     // Save to localStorage
     localStorage.setItem('preferredLanguage', lang);
+}
+
+function updateThemeDropdown(lang) {
+    const themeOptions = themeSelect.querySelectorAll('option');
+    themeOptions.forEach(option => {
+        const themeKey = option.value;
+        if (themeNames[lang] && themeNames[lang][themeKey]) {
+            option.textContent = themeNames[lang][themeKey];
+        }
+    });
 }
 
 function t(key) {
@@ -82,6 +97,50 @@ languageSelect.addEventListener('change', (e) => {
 
 // Initialize language on page load
 initLanguage();
+
+// Theme management
+function initTheme() {
+    // Load saved theme from localStorage
+    const savedTheme = localStorage.getItem('preferredTheme');
+    
+    currentTheme = savedTheme || 'light';
+    themeSelect.value = currentTheme;
+    applyTheme(currentTheme);
+}
+
+function applyTheme(themeName) {
+    currentTheme = themeName;
+    
+    const theme = themes[themeName];
+    if (!theme) return;
+    
+    const root = document.documentElement;
+    
+    // Apply all color variables
+    Object.keys(theme.colors).forEach(key => {
+        const cssVar = `--color-${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
+        root.style.setProperty(cssVar, theme.colors[key]);
+    });
+    
+    // Apply special effects if they exist
+    if (theme.special) {
+        Object.keys(theme.special).forEach(key => {
+            const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
+            root.style.setProperty(cssVar, theme.special[key]);
+        });
+    }
+    
+    // Save to localStorage
+    localStorage.setItem('preferredTheme', themeName);
+}
+
+// Theme selector event
+themeSelect.addEventListener('change', (e) => {
+    applyTheme(e.target.value);
+});
+
+// Initialize theme on page load
+initTheme();
 
 // Form submission
 presentationForm.addEventListener('submit', async (e) => {

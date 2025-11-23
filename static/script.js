@@ -22,10 +22,66 @@ const createNewBtn = document.getElementById('createNewBtn');
 const tryAgainBtn = document.getElementById('tryAgainBtn');
 
 const errorMessage = document.getElementById('errorMessage');
+const languageSelect = document.getElementById('languageSelect');
+const htmlRoot = document.getElementById('htmlRoot');
 
 // Global variables
 let currentFilename = null;
 let progressInterval = null;
+let currentLanguage = 'en';
+
+// Language management
+function initLanguage() {
+    // Load saved language from localStorage or use browser language
+    const savedLang = localStorage.getItem('preferredLanguage');
+    const browserLang = navigator.language.split('-')[0];
+    
+    // Check if browser language is supported
+    const supportedLangs = ['en', 'es', 'ru', 'zh', 'fr'];
+    const defaultLang = supportedLangs.includes(browserLang) ? browserLang : 'en';
+    
+    currentLanguage = savedLang || defaultLang;
+    languageSelect.value = currentLanguage;
+    applyTranslations(currentLanguage);
+}
+
+function applyTranslations(lang) {
+    currentLanguage = lang;
+    htmlRoot.setAttribute('lang', lang);
+    
+    const t = translations[lang];
+    
+    // Apply translations to all elements with data-i18n attribute
+    document.querySelectorAll('[data-i18n]').forEach(element => {
+        const key = element.getAttribute('data-i18n');
+        if (t[key]) {
+            element.textContent = t[key];
+        }
+    });
+    
+    // Apply placeholder translations
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(element => {
+        const key = element.getAttribute('data-i18n-placeholder');
+        if (t[key]) {
+            element.placeholder = t[key];
+        }
+    });
+    
+    // Save to localStorage
+    localStorage.setItem('preferredLanguage', lang);
+}
+
+function t(key) {
+    return translations[currentLanguage][key] || key;
+}
+
+// Language selector event
+languageSelect.addEventListener('change', (e) => {
+    applyTranslations(e.target.value);
+});
+
+// Initialize language on page load
+initLanguage();
 
 // Form submission
 presentationForm.addEventListener('submit', async (e) => {
@@ -36,12 +92,12 @@ presentationForm.addEventListener('submit', async (e) => {
     
     // Validation
     if (!topic) {
-        showError('Please enter a presentation topic');
+        showError(t('errorTopicRequired'));
         return;
     }
     
     if (numSlides < 3 || numSlides > 10) {
-        showError('Number of slides must be between 3 and 10');
+        showError(t('errorSlidesRange'));
         return;
     }
     
@@ -95,7 +151,7 @@ async function createPresentation(topic, numSlides) {
             clearInterval(progressInterval);
         }
         
-        showError(error.message || 'An unexpected error occurred');
+        showError(error.message || t('errorUnexpected'));
     }
 }
 
@@ -133,7 +189,7 @@ function showPreview(topic, slides) {
     previewSection.classList.remove('hidden');
     
     previewTopic.textContent = topic;
-    previewSlideCount.textContent = `${slides.length} slides created`;
+    previewSlideCount.textContent = `${slides.length} ${t('slideCount')}`;
     
     // Clear previous slides
     slidesPreview.innerHTML = '';
@@ -144,7 +200,7 @@ function showPreview(topic, slides) {
         slideItem.className = 'slide-item';
         
         const slideTitle = document.createElement('h4');
-        slideTitle.textContent = `Slide ${index + 1}: ${slide.title}`;
+        slideTitle.textContent = `${t('slidePrefix')} ${index + 1}: ${slide.title}`;
         
         const slideContent = document.createElement('p');
         slideContent.textContent = slide.content;

@@ -28,6 +28,54 @@ header {
     color: white;
     padding: 40px 30px;
     text-align: center;
+    position: relative;
+}
+
+/* Language Selector */
+.language-selector {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.language-selector label {
+    font-size: 0.9em;
+    font-weight: 500;
+    color: white;
+    opacity: 0.9;
+}
+
+.language-dropdown {
+    padding: 8px 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    font-size: 0.95em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s;
+    backdrop-filter: blur(10px);
+}
+
+.language-dropdown:hover {
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.language-dropdown:focus {
+    outline: none;
+    background: rgba(255, 255, 255, 0.35);
+    border-color: white;
+}
+
+.language-dropdown option {
+    background: #667eea;
+    color: white;
+    padding: 8px;
 }
 
 header h1 {
@@ -316,6 +364,22 @@ footer {
 
     .subtitle {
         font-size: 1em;
+    }
+    
+    /* Language selector responsive */
+    .language-selector {
+        position: static;
+        margin-bottom: 20px;
+        justify-content: center;
+    }
+    
+    .language-selector label {
+        font-size: 0.85em;
+    }
+    
+    .language-dropdown {
+        font-size: 0.9em;
+        padding: 6px 10px;
     }
 
     main {

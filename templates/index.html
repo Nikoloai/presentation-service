@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" id="htmlRoot">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,8 +10,20 @@
 <body>
     <div class="container">
         <header>
-            <h1>🎨 AI SlideRush</h1>
-            <p class="subtitle">Create beautiful presentations with AI-generated content and images</p>
+            <!-- Language Selector -->
+            <div class="language-selector">
+                <label for="languageSelect" data-i18n="languageLabel">Language</label>
+                <select id="languageSelect" class="language-dropdown">
+                    <option value="en">English</option>
+                    <option value="es">Español</option>
+                    <option value="ru">Русский</option>
+                    <option value="zh">中文</option>
+                    <option value="fr">Français</option>
+                </select>
+            </div>
+            
+            <h1 data-i18n="title">🎨 AI SlideRush</h1>
+            <p class="subtitle" data-i18n="subtitle">Create beautiful presentations with AI-generated content and images</p>
         </header>
 
         <main>
@@ -19,20 +31,21 @@
             <section class="form-section" id="formSection">
                 <form id="presentationForm">
                     <div class="form-group">
-                        <label for="topic">Presentation Topic</label>
+                        <label for="topic" data-i18n="topicLabel">Presentation Topic</label>
                         <input 
                             type="text" 
                             id="topic" 
                             name="topic" 
+                            data-i18n-placeholder="topicPlaceholder"
                             placeholder="e.g., Python for Beginners, Climate Change, Marketing Strategy"
                             required
                             maxlength="100"
                         >
-                        <small>Enter a clear and specific topic</small>
+                        <small data-i18n="topicHint">Enter a clear and specific topic</small>
                     </div>
 
                     <div class="form-group">
-                        <label for="numSlides">Number of Slides</label>
+                        <label for="numSlides" data-i18n="slidesLabel">Number of Slides</label>
                         <input 
                             type="number" 
                             id="numSlides" 
@@ -42,11 +55,11 @@
                             value="5"
                             required
                         >
-                        <small>Choose between 3 and 10 slides</small>
+                        <small data-i18n="slidesHint">Choose between 3 and 10 slides</small>
                     </div>
 
                     <button type="submit" class="btn-primary" id="submitBtn">
-                        <span class="btn-text">Create Presentation</span>
+                        <span class="btn-text" data-i18n="createButton">Create Presentation</span>
                         <span class="btn-icon">✨</span>
                     </button>
                 </form>
@@ -55,27 +68,27 @@
             <!-- Loading Section -->
             <section class="loading-section hidden" id="loadingSection">
                 <div class="spinner"></div>
-                <h2>Generating Your Presentation...</h2>
-                <p class="loading-text">This may take 30-60 seconds</p>
+                <h2 data-i18n="loadingTitle">Generating Your Presentation...</h2>
+                <p class="loading-text" data-i18n="loadingText">This may take 30-60 seconds</p>
                 <div class="progress-steps">
                     <div class="step active" id="step1">
                         <span class="step-icon">📝</span>
-                        <span class="step-text">Generating content</span>
+                        <span class="step-text" data-i18n="step1">Generating content</span>
                     </div>
                     <div class="step" id="step2">
                         <span class="step-icon">🖼️</span>
-                        <span class="step-text">Finding images</span>
+                        <span class="step-text" data-i18n="step2">Finding images</span>
                     </div>
                     <div class="step" id="step3">
                         <span class="step-icon">📊</span>
-                        <span class="step-text">Creating slides</span>
+                        <span class="step-text" data-i18n="step3">Creating slides</span>
                     </div>
                 </div>
             </section>
 
             <!-- Preview Section -->
             <section class="preview-section hidden" id="previewSection">
-                <h2>✅ Presentation Ready!</h2>
+                <h2>✅ <span data-i18n="previewTitle">Presentation Ready!</span></h2>
                 <div class="preview-container">
                     <div class="preview-info">
                         <h3 id="previewTopic"></h3>
@@ -88,10 +101,10 @@
                     
                     <div class="action-buttons">
                         <button class="btn-success" id="downloadBtn">
-                            <span>📥 Download PPTX</span>
+                            <span data-i18n="downloadButton">📥 Download PPTX</span>
                         </button>
                         <button class="btn-secondary" id="createNewBtn">
-                            <span>🔄 Create New Presentation</span>
+                            <span data-i18n="createNewButton">🔄 Create New Presentation</span>
                         </button>
                     </div>
                 </div>
@@ -100,20 +113,21 @@
             <!-- Error Section -->
             <section class="error-section hidden" id="errorSection">
                 <div class="error-container">
-                    <h2>❌ Error</h2>
+                    <h2>❌ <span data-i18n="errorTitle">Error</span></h2>
                     <p id="errorMessage"></p>
                     <button class="btn-secondary" id="tryAgainBtn">
-                        <span>🔄 Try Again</span>
+                        <span data-i18n="tryAgainButton">🔄 Try Again</span>
                     </button>
                 </div>
             </section>
         </main>
 
         <footer>
-            <p>Powered by TheSlides team</p>
+            <p data-i18n="footerText">Powered by TheSlides team</p>
         </footer>
     </div>
 
+    <script src="{{ url_for('static', filename='translations.js') }}"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

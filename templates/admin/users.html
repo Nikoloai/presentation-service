@@ -318,8 +318,8 @@
                         </td>
                         <td>
                             <div class="action-buttons">
-                                <button class="btn btn-edit" onclick="openEditModal({{ user.id }}, '{{ user.status }}')">Edit</button>
-                                <button class="btn btn-delete" onclick="confirmDelete({{ user.id }})">Delete</button>
+                                <button class="btn btn-edit" data-user-id="{{ user.id }}" data-user-status="{{ user.status }}">Edit</button>
+                                <button class="btn btn-delete" data-user-id="{{ user.id }}">Delete</button>
                             </div>
                         </td>
                     </tr>
@@ -341,7 +341,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Edit User Status</h3>
-                <button class="close-modal" onclick="closeEditModal()">&times;</button>
+                <button class="close-modal">&times;</button>
             </div>
             <form id="editUserForm" method="POST">
                 <input type="hidden" id="editUserId" name="user_id">
@@ -353,7 +353,7 @@
                     </select>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-cancel" onclick="closeEditModal()">Cancel</button>
+                    <button type="button" class="btn btn-cancel">Cancel</button>
                     <button type="submit" class="btn btn-save" name="action" value="update_status">Save Changes</button>
                 </div>
             </form>
@@ -398,12 +398,36 @@
         }
 
         // Close modal when clicking outside
-        window.onclick = function(event) {
+        window.addEventListener('click', function(event) {
             const modal = document.getElementById('editModal');
             if (event.target === modal) {
                 closeEditModal();
             }
-        }
+        });
+
+        // Event delegation for edit and delete buttons
+        document.addEventListener('DOMContentLoaded', function() {
+            // Handle edit button clicks
+            document.querySelectorAll('.btn-edit').forEach(function(button) {
+                button.addEventListener('click', function() {
+                    const userId = this.getAttribute('data-user-id');
+                    const userStatus = this.getAttribute('data-user-status');
+                    openEditModal(userId, userStatus);
+                });
+            });
+
+            // Handle delete button clicks
+            document.querySelectorAll('.btn-delete').forEach(function(button) {
+                button.addEventListener('click', function() {
+                    const userId = this.getAttribute('data-user-id');
+                    confirmDelete(userId);
+                });
+            });
+
+            // Handle modal close buttons
+            document.querySelector('.close-modal').addEventListener('click', closeEditModal);
+            document.querySelector('.btn-cancel').addEventListener('click', closeEditModal);
+        });
     </script>
 </body>
 </html>

@@ -23,14 +23,12 @@ const tryAgainBtn = document.getElementById('tryAgainBtn');
 
 const errorMessage = document.getElementById('errorMessage');
 const languageSelect = document.getElementById('languageSelect');
-const themeSelect = document.getElementById('themeSelect');
 const htmlRoot = document.getElementById('htmlRoot');
 
 // Global variables
 let currentFilename = null;
 let progressInterval = null;
 let currentLanguage = 'en';
-let currentTheme = 'light';
 
 // Language management
 function initLanguage() {
@@ -49,35 +47,56 @@ function initLanguage() {
 
 function applyTranslations(lang) {
     currentLanguage = lang;
-    htmlRoot.setAttribute('lang', lang);
+    if (htmlRoot) {
+        htmlRoot.setAttribute('lang', lang);
+    }
     
     const t = translations[lang];
+    if (!t) {
+        console.error('Translations not found for language:', lang);
+        return;
+    }
     
     // Apply translations to all elements with data-i18n attribute
-    document.querySelectorAll('[data-i18n]').forEach(element => {
-        const key = element.getAttribute('data-i18n');
-        if (t[key]) {
-            element.textContent = t[key];
-        }
-    });
+    const i18nElements = document.querySelectorAll('[data-i18n]');
+    if (i18nElements) {
+        i18nElements.forEach(element => {
+            const key = element.getAttribute('data-i18n');
+            if (t[key]) {
+                element.textContent = t[key];
+            }
+        });
+    }
     
     // Apply placeholder translations
-    document.querySelectorAll('[data-i18n-placeholder]').forEach(element => {
-        const key = element.getAttribute('data-i18n-placeholder');
-        if (t[key]) {
-            element.placeholder = t[key];
-        }
-    });
+    const placeholderElements = document.querySelectorAll('[data-i18n-placeholder]');
+    if (placeholderElements) {
+        placeholderElements.forEach(element => {
+            const key = element.getAttribute('data-i18n-placeholder');
+            if (t[key]) {
+                element.placeholder = t[key];
+            }
+        });
+    }
     
-    // Update theme names in dropdown
-    updateThemeDropdown(lang);
+    // Update presentation theme names in dropdown
+    updatePresentationThemeDropdown(lang);
     
     // Save to localStorage
     localStorage.setItem('preferredLanguage', lang);
 }
 
-function updateThemeDropdown(lang) {
-    const themeOptions = themeSelect.querySelectorAll('option');
+function updatePresentationThemeDropdown(lang) {
+    const presentationThemeSelect = document.getElementById('presentationTheme');
+    if (!presentationThemeSelect) {
+        return;
+    }
+    
+    const themeOptions = presentationThemeSelect.querySelectorAll('option');
+    if (!themeOptions || themeOptions.length === 0) {
+        return;
+    }
+    
     themeOptions.forEach(option => {
         const themeKey = option.value;
         if (themeNames[lang] && themeNames[lang][themeKey]) {
@@ -91,56 +110,16 @@ function t(key) {
 }
 
 // Language selector event
-languageSelect.addEventListener('change', (e) => {
-    applyTranslations(e.target.value);
-});
+if (languageSelect) {
+    languageSelect.addEventListener('change', (e) => {
+        applyTranslations(e.target.value);
+    });
+}
 
 // Initialize language on page load
 initLanguage();
 
-// Theme management
-function initTheme() {
-    // Load saved theme from localStorage
-    const savedTheme = localStorage.getItem('preferredTheme');
-    
-    currentTheme = savedTheme || 'light';
-    themeSelect.value = currentTheme;
-    applyTheme(currentTheme);
-}
-
-function applyTheme(themeName) {
-    currentTheme = themeName;
-    
-    const theme = themes[themeName];
-    if (!theme) return;
-    
-    const root = document.documentElement;
-    
-    // Apply all color variables
-    Object.keys(theme.colors).forEach(key => {
-        const cssVar = `--color-${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
-        root.style.setProperty(cssVar, theme.colors[key]);
-    });
-    
-    // Apply special effects if they exist
-    if (theme.special) {
-        Object.keys(theme.special).forEach(key => {
-            const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
-            root.style.setProperty(cssVar, theme.special[key]);
-        });
-    }
-    
-    // Save to localStorage
-    localStorage.setItem('preferredTheme', themeName);
-}
-
-// Theme selector event
-themeSelect.addEventListener('change', (e) => {
-    applyTheme(e.target.value);
-});
-
-// Initialize theme on page load
-initTheme();
+// Note: UI theme management removed as per memory - themes only apply to presentations, not landing page
 
 // Form submission
 presentationForm.addEventListener('submit', async (e) => {

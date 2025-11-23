@@ -11,6 +11,8 @@ const translations = {
         topicHint: "Enter a clear and specific topic",
         slidesLabel: "Number of Slides",
         slidesHint: "Choose between 3 and 10 slides",
+        themeLabel: "Presentation Theme",
+        themeHint: "Select the theme for your presentation slides",
         createButton: "Create Presentation",
         
         // Loading
@@ -52,6 +54,8 @@ const translations = {
         topicHint: "Introduce un tema claro y específico",
         slidesLabel: "Número de Diapositivas",
         slidesHint: "Elige entre 3 y 10 diapositivas",
+        themeLabel: "Tema de Presentación",
+        themeHint: "Selecciona el tema para tus diapositivas de presentación",
         createButton: "Crear Presentación",
         
         // Loading
@@ -93,6 +97,8 @@ const translations = {
         topicHint: "Введите чёткую и конкретную тему",
         slidesLabel: "Количество Слайдов",
         slidesHint: "Выберите от 3 до 10 слайдов",
+        themeLabel: "Тема Презентации",
+        themeHint: "Выберите тему для оформления слайдов презентации",
         createButton: "Создать Презентацию",
         
         // Loading
@@ -134,6 +140,8 @@ const translations = {
         topicHint: "输入明确具体的主题",
         slidesLabel: "幻灯片数量",
         slidesHint: "选择3到10张幻灯片",
+        themeLabel: "演示文稿主题",
+        themeHint: "选择演示文稿幻灯片的主题",
         createButton: "创建演示文稿",
         
         // Loading
@@ -175,6 +183,8 @@ const translations = {
         topicHint: "Entrez un sujet clair et précis",
         slidesLabel: "Nombre de Diapositives",
         slidesHint: "Choisissez entre 3 et 10 diapositives",
+        themeLabel: "Thème de Présentation",
+        themeHint: "Sélectionnez le thème pour vos diapositives de présentation",
         createButton: "Créer une Présentation",
         
         // Loading

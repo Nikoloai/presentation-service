@@ -51,21 +51,22 @@ body {
 header {
     background: var(--gradient-header);
     color: var(--color-text);
-    padding: 40px 30px;
+    padding: 70px 30px 40px 30px;
     text-align: center;
     position: relative;
     backdrop-filter: var(--backdrop-filter);
     border-bottom: var(--border-glass);
 }
 
-/* Language Selector */
+/* Language Selector (LEFT) */
 .language-selector {
     position: absolute;
     top: 20px;
-    right: 30px;
+    left: 30px;
     display: flex;
     align-items: center;
     gap: 10px;
+    z-index: 10;
 }
 
 .language-selector label {
@@ -105,6 +106,50 @@ header {
     background: var(--color-background);
     color: var(--color-text);
     padding: 8px;
+}
+
+/* User Navigation (RIGHT) */
+.user-nav {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 10;
+}
+
+.nav-btn {
+    color: white;
+    text-decoration: none;
+    font-weight: 500;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+    transition: all 0.3s;
+    white-space: nowrap;
+    font-size: 0.95em;
+}
+
+.nav-btn:hover {
+    background: rgba(255, 255, 255, 0.35);
+    transform: translateY(-2px);
+}
+
+.nav-btn-signup {
+    background: rgba(102, 126, 234, 0.9);
+}
+
+.nav-btn-signup:hover {
+    background: rgba(102, 126, 234, 1);
+}
+
+.nav-btn-admin {
+    background: rgba(255, 152, 0, 0.85);
+}
+
+.nav-btn-admin:hover {
+    background: rgba(255, 152, 0, 1);
 }
 
 /* Theme Selector */
@@ -437,6 +482,14 @@ footer {
 
 /* Responsive Design */
 @media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    
+    header {
+        padding: 120px 15px 30px 15px;
+    }
+    
     header h1 {
         font-size: 2em;
     }
@@ -447,17 +500,33 @@ footer {
     
     /* Language selector responsive */
     .language-selector {
-        position: static;
-        margin-bottom: 20px;
-        justify-content: center;
+        top: 10px;
+        left: 10px;
+        flex-direction: column;
+        gap: 5px;
+        align-items: flex-start;
     }
     
     .language-selector label {
-        font-size: 0.85em;
+        font-size: 0.75em;
     }
     
     .language-dropdown {
-        font-size: 0.9em;
+        font-size: 0.85em;
+        padding: 6px 10px;
+    }
+    
+    /* User navigation responsive */
+    .user-nav {
+        top: 10px;
+        right: 10px;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-end;
+    }
+    
+    .nav-btn {
+        font-size: 0.8em;
         padding: 6px 10px;
     }
     

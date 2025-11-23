@@ -152,6 +152,36 @@
             border-radius: 5px;
             margin-bottom: 20px;
             font-weight: 500;
+            position: relative;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes fadeOut {
+            from {
+                opacity: 1;
+            }
+            to {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+        }
+
+        .notification.fade-out {
+            animation: fadeOut 0.3s ease-out forwards;
         }
 
         .notification.success {
@@ -164,6 +194,22 @@
             background-color: #ffebee;
             color: #c62828;
             border-left: 4px solid #c62828;
+        }
+
+        .notification .close-notification {
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0;
+            margin-left: 15px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .notification .close-notification:hover {
+            opacity: 1;
         }
 
         .modal {
@@ -268,6 +314,132 @@
             margin-bottom: 10px;
             color: #2c3e50;
         }
+
+        /* Search and Filter Bar */
+        .search-bar {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .search-bar input[type="text"] {
+            flex: 1;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .search-bar input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .search-bar .btn-search {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .search-bar .btn-search:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .search-bar .btn-clear {
+            background: #95a5a6;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .search-bar .btn-clear:hover {
+            background: #7f8c8d;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-top: 30px;
+            padding: 20px;
+        }
+
+        .pagination-info {
+            color: #666;
+            font-size: 14px;
+            margin-right: 20px;
+        }
+
+        .pagination button,
+        .pagination a {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            background: white;
+            color: #333;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .pagination button:hover:not(:disabled),
+        .pagination a:hover {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+            transform: translateY(-2px);
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination .page-number {
+            min-width: 40px;
+            text-align: center;
+        }
+
+        .pagination .page-number.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        /* Status badges with icons */
+        .status-active::before {
+            content: '✅ ';
+        }
+
+        .status-blocked::before {
+            content: '❌ ';
+        }
+
+        /* Table improvements */
+        .users-count {
+            color: #666;
+            font-size: 14px;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -288,10 +460,35 @@
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="notification {{ category }}">{{ message }}</div>
+                    <div class="notification {{ category }}">
+                        <span>{{ message }}</span>
+                        <button class="close-notification" aria-label="Close">&times;</button>
+                    </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <!-- Search Bar -->
+        <div class="search-bar">
+            <form method="GET" action="/admin/users" style="display: flex; gap: 15px; flex: 1; align-items: center;">
+                <input 
+                    type="text" 
+                    name="search" 
+                    placeholder="🔍 Search by email or status..."
+                    value="{{ search_query if search_query else '' }}"
+                >
+                <button type="submit" class="btn-search">🔍 Search</button>
+                {% if search_query %}
+                    <a href="/admin/users" class="btn-clear">✖ Clear</a>
+                {% endif %}
+            </form>
+        </div>
+
+        {% if total_users is defined %}
+            <div class="users-count">
+                <strong>Total: {{ total_users }}</strong> user{{ 's' if total_users != 1 else '' }}{{ ' found' if search_query else '' }}
+            </div>
+        {% endif %}
 
         {% if users %}
         <div class="users-table">
@@ -327,11 +524,60 @@
                 </tbody>
             </table>
         </div>
+        
+        <!-- Pagination -->
+        {% if total_pages is defined and total_pages > 1 %}
+        <div class="pagination">
+            <span class="pagination-info">Page {{ page }} of {{ total_pages }}</span>
+            
+            <!-- Previous Button -->
+            {% if page > 1 %}
+                <a href="/admin/users?page={{ page - 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">◀ Previous</a>
+            {% else %}
+                <button disabled>◀ Previous</button>
+            {% endif %}
+            
+            <!-- Page Numbers -->
+            {% set start_page = [1, page - 2]|max %}
+            {% set end_page = [total_pages, page + 2]|min %}
+            
+            {% if start_page > 1 %}
+                <a href="/admin/users?page=1{% if search_query %}&search={{ search_query }}{% endif %}" class="page-number">1</a>
+                {% if start_page > 2 %}
+                    <span>...</span>
+                {% endif %}
+            {% endif %}
+            
+            {% for p in range(start_page, end_page + 1) %}
+                <a 
+                    href="/admin/users?page={{ p }}{% if search_query %}&search={{ search_query }}{% endif %}" 
+                    class="page-number {{ 'active' if p == page else '' }}"
+                >{{ p }}</a>
+            {% endfor %}
+            
+            {% if end_page < total_pages %}
+                {% if end_page < total_pages - 1 %}
+                    <span>...</span>
+                {% endif %}
+                <a href="/admin/users?page={{ total_pages }}{% if search_query %}&search={{ search_query }}{% endif %}" class="page-number">{{ total_pages }}</a>
+            {% endif %}
+            
+            <!-- Next Button -->
+            {% if page < total_pages %}
+                <a href="/admin/users?page={{ page + 1 }}{% if search_query %}&search={{ search_query }}{% endif %}">Next ▶</a>
+            {% else %}
+                <button disabled>Next ▶</button>
+            {% endif %}
+        </div>
+        {% endif %}
         {% else %}
         <div class="empty-state">
-            <div>👥</div>
-            <h3>No Users Found</h3>
-            <p>There are currently no registered users in the system.</p>
+            <div>🔍</div>
+            <h3>{{ 'No Users Found' if search_query else 'No Users Registered' }}</h3>
+            <p>{{ 'No users match your search criteria. Try a different search term.' if search_query else 'There are currently no registered users in the system.' }}</p>
+            {% if search_query %}
+                <a href="/admin/users" class="btn btn-edit" style="margin-top: 20px; display: inline-block;">✖ Clear Search</a>
+            {% endif %}
         </div>
         {% endif %}
     </div>
@@ -361,6 +607,32 @@
     </div>
 
     <script>
+        // Auto-hide notifications after 5 seconds
+        document.addEventListener('DOMContentLoaded', function() {
+            const notifications = document.querySelectorAll('.notification');
+            
+            notifications.forEach(function(notification) {
+                // Auto-hide after 5 seconds
+                setTimeout(function() {
+                    notification.classList.add('fade-out');
+                    setTimeout(function() {
+                        notification.remove();
+                    }, 300);
+                }, 5000);
+            });
+            
+            // Manual close button
+            document.querySelectorAll('.close-notification').forEach(function(button) {
+                button.addEventListener('click', function() {
+                    const notification = this.parentElement;
+                    notification.classList.add('fade-out');
+                    setTimeout(function() {
+                        notification.remove();
+                    }, 300);
+                });
+            });
+        });
+
         // Open edit modal with user data
         function openEditModal(userId, status) {
             document.getElementById('editUserId').value = userId;
@@ -373,9 +645,11 @@
             document.getElementById('editModal').style.display = 'none';
         }
 
-        // Confirm user deletion
+        // Confirm user deletion with improved modal
         function confirmDelete(userId) {
-            if (confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+            const confirmed = confirm('⚠️ WARNING: Delete User\n\nAre you sure you want to delete this user?\n\nThis action cannot be undone and will:\n- Delete the user account permanently\n- Remove all associated presentations\n- Cannot be recovered\n\nClick OK to confirm deletion.');
+            
+            if (confirmed) {
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.style.display = 'none';
@@ -391,6 +665,27 @@
                 actionInput.name = 'action';
                 actionInput.value = 'delete_user';
                 form.appendChild(actionInput);
+                
+                // Preserve search and pagination
+                const urlParams = new URLSearchParams(window.location.search);
+                const search = urlParams.get('search');
+                const page = urlParams.get('page');
+                
+                if (search) {
+                    const searchInput = document.createElement('input');
+                    searchInput.type = 'hidden';
+                    searchInput.name = 'search';
+                    searchInput.value = search;
+                    form.appendChild(searchInput);
+                }
+                
+                if (page) {
+                    const pageInput = document.createElement('input');
+                    pageInput.type = 'hidden';
+                    pageInput.name = 'page';
+                    pageInput.value = page;
+                    form.appendChild(pageInput);
+                }
                 
                 document.body.appendChild(form);
                 form.submit();
@@ -425,8 +720,16 @@
             });
 
             // Handle modal close buttons
-            document.querySelector('.close-modal').addEventListener('click', closeEditModal);
-            document.querySelector('.btn-cancel').addEventListener('click', closeEditModal);
+            const closeModalBtn = document.querySelector('.close-modal');
+            const cancelBtn = document.querySelector('.btn-cancel');
+            
+            if (closeModalBtn) {
+                closeModalBtn.addEventListener('click', closeEditModal);
+            }
+            
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', closeEditModal);
+            }
         });
     </script>
 </body>

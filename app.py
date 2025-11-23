@@ -5,10 +5,11 @@ import re
 import hashlib
 import sqlite3
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, session
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from authlib.integrations.flask_client import OAuth
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -26,6 +27,20 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
+
+# Initialize OAuth
+oauth = OAuth(app)
+
+# Google OAuth Configuration
+google = oauth.register(
+    name='google',
+    client_id=os.getenv('GOOGLE_CLIENT_ID'),
+    client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={
+        'scope': 'openid email profile'
+    }
+)
 
 # Initialize Flask-Login
 login_manager = LoginManager()
@@ -62,7 +77,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
+            password_hash TEXT,
+            google_id TEXT UNIQUE,
+            name TEXT,
+            picture TEXT,
             status TEXT DEFAULT 'active',
             registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -148,6 +166,148 @@ def update_user_status(user_id, status):
         print(f"Error updating user status: {e}")
         return False
 
+def create_user(email, password):
+    """Create a new user with hashed password"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if user already exists
+        cursor.execute('SELECT id FROM users WHERE email = ?', (email,))
+        if cursor.fetchone():
+            conn.close()
+            return None, 'Email already registered'
+        
+        # Create user with hashed password
+        password_hash = generate_password_hash(password)
+        cursor.execute(
+            'INSERT INTO users (email, password_hash, status) VALUES (?, ?, ?)',
+            (email, password_hash, 'active')
+        )
+        conn.commit()
+        user_id = cursor.lastrowid
+        conn.close()
+        
+        return user_id, None
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        return None, 'Error creating user account'
+
+def authenticate_user(email, password):
+    """Authenticate user by email and password"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if not user:
+            return None, 'Invalid email or password'
+        
+        if user['status'] == 'blocked':
+            return None, 'Your account has been blocked. Please contact support.'
+        
+        # Check password
+        if not check_password_hash(user['password_hash'], password):
+            return None, 'Invalid email or password'
+        
+        return dict(user), None
+    except Exception as e:
+        print(f"Error authenticating user: {e}")
+        return None, 'Authentication error'
+
+def validate_email(email):
+    """Validate email format"""
+    if not email or len(email) < 3:
+        return False, 'Email is required'
+    
+    # Simple email regex pattern
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
+        return False, 'Invalid email format'
+    
+    if len(email) > 100:
+        return False, 'Email is too long (max 100 characters)'
+    
+    return True, None
+
+def validate_password(password):
+    """Validate password strength"""
+    if not password:
+        return False, 'Password is required'
+    
+    if len(password) < 6:
+        return False, 'Password must be at least 6 characters long'
+    
+    if len(password) > 100:
+        return False, 'Password is too long (max 100 characters)'
+    
+    # Check for at least one letter and one number
+    if not re.search(r'[a-zA-Z]', password):
+        return False, 'Password must contain at least one letter'
+    
+    if not re.search(r'[0-9]', password):
+        return False, 'Password must contain at least one number'
+    
+    return True, None
+
+def get_or_create_google_user(google_id, email, name, picture):
+    """Get existing Google user or create new one"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Try to find user by Google ID
+        cursor.execute('SELECT * FROM users WHERE google_id = ?', (google_id,))
+        user = cursor.fetchone()
+        
+        if user:
+            # Update user info if changed
+            cursor.execute(
+                'UPDATE users SET name = ?, picture = ?, email = ? WHERE google_id = ?',
+                (name, picture, email, google_id)
+            )
+            conn.commit()
+            conn.close()
+            return dict(user), None
+        
+        # Try to find user by email (link existing account)
+        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+        user = cursor.fetchone()
+        
+        if user:
+            # Link Google account to existing email account
+            cursor.execute(
+                'UPDATE users SET google_id = ?, name = ?, picture = ? WHERE email = ?',
+                (google_id, name, picture, email)
+            )
+            conn.commit()
+            user_dict = dict(user)
+            user_dict['google_id'] = google_id
+            conn.close()
+            return user_dict, None
+        
+        # Create new user
+        cursor.execute(
+            'INSERT INTO users (email, google_id, name, picture, status) VALUES (?, ?, ?, ?, ?)',
+            (email, google_id, name, picture, 'active')
+        )
+        conn.commit()
+        user_id = cursor.lastrowid
+        
+        cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        
+        return dict(user), None
+    except Exception as e:
+        print(f"Error with Google user: {e}")
+        return None, 'Error processing Google account'
+
 # Simple admin user storage (in production, use a proper database)
 # For now, we'll use a static dictionary with a hashed password
 ADMIN_USERS = {
@@ -159,18 +319,38 @@ ADMIN_USERS = {
 
 # User class for Flask-Login
 class User(UserMixin):
-    def __init__(self, user_id):
+    def __init__(self, user_id, email=None, is_admin_user=False, name=None, picture=None):
         self.id = user_id
+        self.email = email
+        self.is_admin_user = is_admin_user
+        self.name = name or email
+        self.picture = picture
+    
+    def is_admin(self):
+        return self.is_admin_user
 
 @login_manager.user_loader
 def load_user(user_id):
+    # Check if admin
     if user_id in ADMIN_USERS:
-        return User(user_id)
+        return User(user_id, is_admin_user=True)
+    
+    # Check if regular user
+    user_data = get_user_by_id(user_id)
+    if user_data:
+        return User(
+            user_data['id'], 
+            email=user_data['email'], 
+            is_admin_user=False,
+            name=user_data.get('name'),
+            picture=user_data.get('picture')
+        )
+    
     return None
 
 # Check if current user is admin
 def is_admin():
-    return current_user.is_authenticated and current_user.id == 'admin'
+    return current_user.is_authenticated and hasattr(current_user, 'is_admin_user') and current_user.is_admin_user
 
 
 def translate_keyword_to_english(keyword, topic):
@@ -1271,25 +1451,426 @@ def admin_users():
         if action == 'delete_user' and user_id:
             # Delete user
             if delete_user(user_id):
-                flash('User deleted successfully.', 'success')
+                flash('✅ User deleted successfully.', 'success')
             else:
-                flash('Error deleting user.', 'error')
+                flash('❌ Error: Failed to delete user. Please try again.', 'error')
         elif action == 'update_status' and user_id:
             # Update user status
             status = request.form.get('status')
             if status in ['active', 'blocked']:
                 if update_user_status(user_id, status):
-                    flash('User status updated successfully.', 'success')
+                    status_text = 'activated' if status == 'active' else 'blocked'
+                    flash(f'✅ User status updated: {status_text}.', 'success')
                 else:
-                    flash('Error updating user status.', 'error')
+                    flash('❌ Error: Failed to update user status.', 'error')
             else:
-                flash('Invalid status.', 'error')
+                flash('❌ Invalid status value.', 'error')
         
-        return redirect(url_for('admin_users'))
+        # Preserve search and pagination parameters
+        search = request.args.get('search', '')
+        page = request.args.get('page', 1, type=int)
+        return redirect(url_for('admin_users', search=search, page=page))
     
-    # GET request - display all users
-    users = get_all_users()
-    return render_template('admin/users.html', users=users)
+    # GET request - display users with pagination and search
+    search_query = request.args.get('search', '').strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = 15  # Users per page
+    
+    # Get filtered users
+    all_users = get_all_users()
+    
+    # Apply search filter
+    if search_query:
+        filtered_users = [
+            user for user in all_users
+            if search_query.lower() in user['email'].lower() or 
+               search_query.lower() in user['status'].lower()
+        ]
+    else:
+        filtered_users = all_users
+    
+    # Calculate pagination
+    total_users = len(filtered_users)
+    total_pages = max(1, (total_users + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))  # Ensure page is in valid range
+    
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_users = filtered_users[start_idx:end_idx]
+    
+    return render_template(
+        'admin/users.html',
+        users=paginated_users,
+        total_users=total_users,
+        page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_query=search_query
+    )
+
+# Google OAuth routes
+@app.route('/auth/google')
+def google_login():
+    """Initiate Google OAuth login"""
+    redirect_uri = url_for('google_callback', _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+@app.route('/auth/google/callback')
+def google_callback():
+    """Handle Google OAuth callback"""
+    try:
+        # Get access token
+        token = google.authorize_access_token()
+        
+        # Get user info
+        user_info = token.get('userinfo')
+        if not user_info:
+            flash('❌ Failed to get user information from Google', 'error')
+            return redirect(url_for('login'))
+        
+        google_id = user_info.get('sub')
+        email = user_info.get('email')
+        name = user_info.get('name')
+        picture = user_info.get('picture')
+        
+        if not google_id or not email:
+            flash('❌ Invalid Google account data', 'error')
+            return redirect(url_for('login'))
+        
+        # Get or create user
+        user_data, error = get_or_create_google_user(google_id, email, name, picture)
+        if error:
+            flash(f'❌ {error}', 'error')
+            return redirect(url_for('login'))
+        
+        if user_data['status'] == 'blocked':
+            flash('❌ Your account has been blocked. Please contact support.', 'error')
+            return redirect(url_for('login'))
+        
+        # Login user
+        user = User(
+            user_data['id'], 
+            email=user_data['email'], 
+            is_admin_user=False,
+            name=user_data.get('name'),
+            picture=user_data.get('picture')
+        )
+        login_user(user, remember=True)
+        
+        # Check if this is a new user (just created)
+        if user_data.get('registration_date'):
+            from datetime import datetime, timedelta
+            reg_date = datetime.fromisoformat(user_data['registration_date'])
+            if datetime.now() - reg_date < timedelta(seconds=5):
+                flash('✅ Welcome to AI SlideRush! Your account has been created.', 'success')
+            else:
+                flash('✅ Welcome back!', 'success')
+        else:
+            flash('✅ Logged in successfully!', 'success')
+        
+        return redirect(url_for('user_dashboard'))
+        
+    except Exception as e:
+        print(f"Google OAuth error: {e}")
+        flash('❌ Authentication failed. Please try again.', 'error')
+        return redirect(url_for('login'))
+
+# User authentication routes
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    """User registration page"""
+    if current_user.is_authenticated:
+        # If already logged in, redirect to dashboard
+        if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
+            return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('user_dashboard'))
+    
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        password_confirm = request.form.get('password_confirm', '')
+        
+        # Validate email
+        is_valid_email, email_error = validate_email(email)
+        if not is_valid_email:
+            flash(f'❌ {email_error}', 'error')
+            return render_template('signup.html')
+        
+        # Validate password
+        is_valid_password, password_error = validate_password(password)
+        if not is_valid_password:
+            flash(f'❌ {password_error}', 'error')
+            return render_template('signup.html')
+        
+        # Check password confirmation
+        if password != password_confirm:
+            flash('❌ Passwords do not match', 'error')
+            return render_template('signup.html')
+        
+        # Create user
+        user_id, error = create_user(email, password)
+        if error:
+            flash(f'❌ {error}', 'error')
+            return render_template('signup.html')
+        
+        # Auto-login after registration
+        user_data = get_user_by_id(user_id)
+        if user_data:
+            user = User(
+                user_data['id'], 
+                email=user_data['email'], 
+                is_admin_user=False,
+                name=user_data.get('name'),
+                picture=user_data.get('picture')
+            )
+            login_user(user)
+            flash('✅ Account created successfully! Welcome to AI SlideRush!', 'success')
+            return redirect(url_for('user_dashboard'))
+    
+    return render_template('signup.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """User login page"""
+    if current_user.is_authenticated:
+        # If already logged in, redirect to appropriate dashboard
+        if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
+            return redirect(url_for('admin_dashboard'))
+        return redirect(url_for('user_dashboard'))
+    
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        
+        if not email or not password:
+            flash('❌ Please enter both email and password', 'error')
+            return render_template('login.html')
+        
+        # Authenticate user
+        user_data, error = authenticate_user(email, password)
+        if error:
+            flash(f'❌ {error}', 'error')
+            return render_template('login.html')
+        
+        # Login user
+        user = User(
+            user_data['id'], 
+            email=user_data['email'], 
+            is_admin_user=False,
+            name=user_data.get('name'),
+            picture=user_data.get('picture')
+        )
+        login_user(user, remember=True)
+        flash('✅ Logged in successfully!', 'success')
+        
+        # Redirect to next page or dashboard
+        next_page = request.args.get('next')
+        if next_page:
+            return redirect(next_page)
+        return redirect(url_for('user_dashboard'))
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    """User logout"""
+    logout_user()
+    flash('✅ You have been logged out successfully.', 'success')
+    return redirect(url_for('index'))
+
+@app.route('/dashboard')
+@login_required
+def user_dashboard():
+    """User dashboard - personal cabinet"""
+    # Redirect admins to admin dashboard
+    if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
+        return redirect(url_for('admin_dashboard'))
+    
+    # Get search and pagination parameters
+    search_query = request.args.get('search', '').strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = 15
+    
+    # Get user's presentations
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Get total count for stats
+        cursor.execute(
+            'SELECT COUNT(*) as count FROM presentations WHERE user_id = ?',
+            (current_user.id,)
+        )
+        total_presentations = cursor.fetchone()['count']
+        
+        # Build query with search
+        if search_query:
+            cursor.execute(
+                '''SELECT * FROM presentations 
+                   WHERE user_id = ? AND topic LIKE ? 
+                   ORDER BY creation_date DESC''',
+                (current_user.id, f'%{search_query}%')
+            )
+        else:
+            cursor.execute(
+                'SELECT * FROM presentations WHERE user_id = ? ORDER BY creation_date DESC',
+                (current_user.id,)
+            )
+        
+        all_presentations = [dict(row) for row in cursor.fetchall()]
+        
+        # Get user data
+        cursor.execute('SELECT * FROM users WHERE id = ?', (current_user.id,))
+        user_data = dict(cursor.fetchone()) if cursor.fetchone() else None
+        
+        cursor.execute('SELECT * FROM users WHERE id = ?', (current_user.id,))
+        user_data = dict(cursor.fetchone())
+        
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching presentations: {e}")
+        all_presentations = []
+        total_presentations = 0
+        user_data = None
+    
+    # Calculate pagination
+    total_filtered = len(all_presentations)
+    total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_presentations = all_presentations[start_idx:end_idx]
+    
+    return render_template(
+        'dashboard.html',
+        presentations=paginated_presentations,
+        total_presentations=total_presentations,
+        user_data=user_data,
+        page=page,
+        total_pages=total_pages,
+        search_query=search_query
+    )
+
+@app.route('/presentation/delete', methods=['POST'])
+@login_required
+def delete_presentation():
+    """Delete user's presentation"""
+    # Redirect admins
+    if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
+        flash('❌ Admins cannot delete presentations from user dashboard', 'error')
+        return redirect(url_for('admin_dashboard'))
+    
+    presentation_id = request.form.get('presentation_id')
+    if not presentation_id:
+        flash('❌ Invalid request', 'error')
+        return redirect(url_for('user_dashboard'))
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Verify ownership
+        cursor.execute(
+            'SELECT * FROM presentations WHERE id = ? AND user_id = ?',
+            (presentation_id, current_user.id)
+        )
+        presentation = cursor.fetchone()
+        
+        if not presentation:
+            conn.close()
+            flash('❌ Presentation not found or access denied', 'error')
+            return redirect(url_for('user_dashboard'))
+        
+        # Delete presentation
+        cursor.execute('DELETE FROM presentations WHERE id = ?', (presentation_id,))
+        conn.commit()
+        conn.close()
+        
+        flash('✅ Presentation deleted successfully', 'success')
+    except Exception as e:
+        print(f"Error deleting presentation: {e}")
+        flash('❌ Error deleting presentation', 'error')
+    
+    # Preserve search and pagination
+    search = request.form.get('search', '')
+    page = request.form.get('page', 1, type=int)
+    
+    return redirect(url_for('user_dashboard', search=search, page=page))
+
+@app.route('/profile/edit', methods=['GET', 'POST'])
+@login_required
+def edit_profile():
+    """Edit user profile"""
+    # Redirect admins
+    if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
+        flash('❌ Admins cannot edit profile from user dashboard', 'error')
+        return redirect(url_for('admin_dashboard'))
+    
+    # Get user data
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE id = ?', (current_user.id,))
+        user_data = dict(cursor.fetchone())
+        conn.close()
+    except Exception as e:
+        print(f"Error fetching user data: {e}")
+        user_data = None
+    
+    if request.method == 'POST':
+        # Only allow password change for non-Google users
+        if user_data and not user_data.get('google_id'):
+            current_password = request.form.get('current_password', '')
+            new_password = request.form.get('new_password', '')
+            confirm_password = request.form.get('confirm_password', '')
+            
+            if current_password or new_password or confirm_password:
+                # Validate current password
+                if not current_password:
+                    flash('❌ Please enter your current password', 'error')
+                    return render_template('profile_edit.html', user_data=user_data)
+                
+                # Verify current password
+                if not check_password_hash(user_data['password_hash'], current_password):
+                    flash('❌ Current password is incorrect', 'error')
+                    return render_template('profile_edit.html', user_data=user_data)
+                
+                # Validate new password
+                is_valid, error_msg = validate_password(new_password)
+                if not is_valid:
+                    flash(f'❌ {error_msg}', 'error')
+                    return render_template('profile_edit.html', user_data=user_data)
+                
+                # Check password confirmation
+                if new_password != confirm_password:
+                    flash('❌ New passwords do not match', 'error')
+                    return render_template('profile_edit.html', user_data=user_data)
+                
+                # Update password
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    new_password_hash = generate_password_hash(new_password)
+                    cursor.execute(
+                        'UPDATE users SET password_hash = ? WHERE id = ?',
+                        (new_password_hash, current_user.id)
+                    )
+                    conn.commit()
+                    conn.close()
+                    
+                    flash('✅ Password updated successfully!', 'success')
+                    return redirect(url_for('user_dashboard'))
+                except Exception as e:
+                    print(f"Error updating password: {e}")
+                    flash('❌ Error updating password', 'error')
+        else:
+            flash('ℹ️ No changes to save', 'error')
+    
+    return render_template('profile_edit.html', user_data=user_data)
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
@@ -1300,7 +1881,7 @@ def admin_login():
         
         # Check if user exists and password is correct
         if username in ADMIN_USERS and check_password_hash(ADMIN_USERS[username]['password_hash'], password):
-            user = User(username)
+            user = User(username, is_admin_user=True)
             login_user(user)
             flash('Logged in successfully.', 'success')
             return redirect(url_for('admin_dashboard'))

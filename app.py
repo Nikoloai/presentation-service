@@ -1254,9 +1254,6 @@ def admin_dashboard():
         flash('Access denied. Administrator privileges required.', 'error')
         return redirect(url_for('admin_login'))
     return render_template('admin/dashboard.html')
-@app.route('/admin/login')
-def admin_login():
-    return render_template('admin/login.html')
 
 @app.route('/admin/users', methods=['GET', 'POST'])
 @login_required

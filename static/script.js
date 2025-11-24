@@ -247,7 +247,7 @@ async function createPresentation(topic, numSlides, theme, presentationType) {
         
         // Show preview
         currentFilename = data.filename;
-        showPreview(topic, data.slides);
+        showPreview(topic, data.slides, data.presentation_type);
         
     } catch (error) {
         console.error('Error:', error);
@@ -290,12 +290,21 @@ function animateProgressSteps() {
 }
 
 // Show preview
-function showPreview(topic, slides) {
+function showPreview(topic, slides, presentationType) {
     loadingSection.classList.add('hidden');
     previewSection.classList.remove('hidden');
     
     previewTopic.textContent = topic;
-    previewSlideCount.textContent = `${slides.length} ${t('slideCount')}`;
+    
+    // Add presentation type info if available
+    let slideCountText = `${slides.length} ${t('slideCount')}`;
+    if (presentationType && presentationTypeNames[currentLanguage]) {
+        const typeName = presentationTypeNames[currentLanguage][presentationType];
+        if (typeName) {
+            slideCountText += ` • ${typeName}`;
+        }
+    }
+    previewSlideCount.textContent = slideCountText;
     
     // Clear previous slides
     slidesPreview.innerHTML = '';

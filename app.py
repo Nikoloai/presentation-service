@@ -509,12 +509,22 @@ def detect_language(text):
         return 'en'
 
 
-def generate_slide_content_in_language(topic, num_slides, language='en'):
+def generate_slide_content_in_language(topic, num_slides, language='en', presentation_type='business'):
     """
     Generate slide content using OpenAI ChatGPT API in the specified language
+    with structure optimized for presentation type
     """
     try:
-        print(f"Generating content in language: {language}")
+        print(f"Generating content in language: {language}, type: {presentation_type}")
+        
+        # Get presentation type info
+        type_info = get_presentation_type_info(presentation_type)
+        structure_guide = type_info.get('structure', [])
+        tips = type_info.get('tips', '')
+        
+        # Build structure guidance string
+        structure_text = "\n".join([f"- Slide {i+1}: {item['title']} — {item['description']}" 
+                                     for i, item in enumerate(structure_guide[:num_slides])])
         
         headers = {
             'Authorization': f'Bearer {OPENAI_API_KEY}',
@@ -533,12 +543,20 @@ def generate_slide_content_in_language(topic, num_slides, language='en'):
         # Get the language name for the prompt
         language_name = language_names.get(language, 'English')
         
-        # Create prompt based on language
+        # Create prompt based on language and presentation type
         if language == 'ru':
+            type_name_ru = type_info.get('name_ru', 'Презентация')
             prompt = f"""Создай структурированную презентацию на тему: "{topic}"
 Количество слайдов: {num_slides}
+Тип презентации: {type_name_ru}
+
+РЕКОМЕНДУЕМАЯ СТРУКТУРА ДЛЯ ЭТОГО ТИПА:
+{structure_text}
+
+СОВЕТ ПО СТИЛЮ: {tips}
 
 ВАЖНО: Презентация должна состоять из ТЕЗИСОВ, а не описаний!
+Используй рекомендованную структуру как ориентир, но адаптируй её под тему "{topic}".
 
 ТЕЗИС — это ключевое утверждение, которое раскрывает часть темы.
 НЕ просто описывай, а формулируй конкретные идеи и аргументы.
@@ -731,10 +749,18 @@ CRITIQUE :
 - Le titre et le contenu de chaque diapositive doivent être LIÉS LOGIQUEMENT
 - Chaque search_keyword doit être DIFFÉRENT et spécifique"""
         else:  # Default to English
+            type_name_en = type_info.get('name_en', 'Presentation')
             prompt = f"""Create a structured presentation on the topic: "{topic}"
 Number of slides: {num_slides}
+Presentation Type: {type_name_en}
+
+RECOMMENDED STRUCTURE FOR THIS TYPE:
+{structure_text}
+
+STYLE GUIDANCE: {tips}
 
 IMPORTANT: The presentation must consist of THESIS STATEMENTS, not descriptions!
+Use the recommended structure as a guide, but adapt it to the topic "{topic}".
 
 THESIS — a key statement that reveals part of the topic.
 Do NOT just describe, but formulate specific ideas and arguments.
@@ -1471,7 +1497,7 @@ def create_presentation_api():
         
         # Generate slide content in the selected language
         print(f"Generating content for topic: {topic}, slides: {num_slides}, language: {language}, type: {presentation_type}")
-        slides_data = generate_slide_content_in_language(topic, num_slides, language)
+        slides_data = generate_slide_content_in_language(topic, num_slides, language, presentation_type)
         
         if not slides_data:
             # Use fallback slides in the selected language

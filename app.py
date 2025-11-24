@@ -94,16 +94,99 @@ def init_db():
             topic TEXT NOT NULL,
             num_slides INTEGER,
             filename TEXT,
+            presentation_type TEXT DEFAULT 'business',
             creation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+    
+    # Migration: Add presentation_type column if it doesn't exist
+    cursor.execute("PRAGMA table_info(presentations)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'presentation_type' not in columns:
+        cursor.execute('ALTER TABLE presentations ADD COLUMN presentation_type TEXT DEFAULT "business"')
+        print("✅ Migration: Added presentation_type column to presentations table")
     
     conn.commit()
     conn.close()
 
 # Initialize database on startup
 init_db()
+
+# Presentation types configuration
+PRESENTATION_TYPES = {
+    'business': {
+        'name_ru': 'Бизнес-презентация',
+        'name_en': 'Business Presentation',
+        'icon': '💼',
+        'color': '#667eea',
+        'structure': [
+            {'title': 'Введение', 'description': 'Представьте компанию и тему'},
+            {'title': 'Проблема', 'description': 'Опишите проблему или вызов'},
+            {'title': 'Решение', 'description': 'Предложите ваше решение'},
+            {'title': 'Результаты', 'description': 'Покажите достижения и метрики'},
+            {'title': 'Призыв к действию', 'description': 'Следующие шаги'}
+        ],
+        'tips': 'Фокус на фактах, данных и конкретных результатах. Используйте графики и диаграммы.'
+    },
+    'sales': {
+        'name_ru': 'Продажи',
+        'name_en': 'Sales Pitch',
+        'icon': '💰',
+        'color': '#27ae60',
+        'structure': [
+            {'title': 'Hook', 'description': 'Привлеките внимание с первых секунд'},
+            {'title': 'Проблема', 'description': 'Болевые точки клиента'},
+            {'title': 'Решение', 'description': 'Ваш продукт/услуга'},
+            {'title': 'Преимущества', 'description': 'Уникальные особенности'},
+            {'title': 'Цена', 'description': 'Ценовое предложение'},
+            {'title': 'Демонстрация', 'description': 'Примеры и кейсы'},
+            {'title': 'Призыв к действию', 'description': 'Закрытие сделки'}
+        ],
+        'tips': 'Эмоциональность + конкретика. Покажите ROI и быстрые победы.'
+    },
+    'investor': {
+        'name_ru': 'Инвестиционный питч',
+        'name_en': 'Investor Pitch',
+        'icon': '📈',
+        'color': '#e67e22',
+        'structure': [
+            {'title': 'Проблема', 'description': 'Глобальная проблема на рынке'},
+            {'title': 'Решение', 'description': 'Инновационное решение'},
+            {'title': 'Рынок', 'description': 'Размер и потенциал рынка'},
+            {'title': 'Бизнес-модель', 'description': 'Как вы зарабатываете'},
+            {'title': 'Команда', 'description': 'Ключевые люди'},
+            {'title': 'Финансы', 'description': 'Прогнозы и потребность в капитале'},
+            {'title': 'Призыв к действию', 'description': 'Инвестиционное предложение'}
+        ],
+        'tips': 'Масштабируемость, рост, команда. Фокус на цифрах и потенциале.'
+    },
+    'educational': {
+        'name_ru': 'Образовательная',
+        'name_en': 'Educational',
+        'icon': '🎓',
+        'color': '#3498db',
+        'structure': [
+            {'title': 'Введение', 'description': 'Цели и обзор темы'},
+            {'title': 'Теория', 'description': 'Основные концепции'},
+            {'title': 'Примеры', 'description': 'Практические примеры'},
+            {'title': 'Практика', 'description': 'Упражнения и задания'},
+            {'title': 'Выводы', 'description': 'Ключевые моменты'},
+            {'title': 'Вопросы', 'description': 'Q&A и дополнительные материалы'}
+        ],
+        'tips': 'Ясность, структура, повторение. Используйте визуализацию и примеры.'
+    }
+}
+
+# Validate presentation type
+def validate_presentation_type(ptype):
+    """Validate if presentation type is supported"""
+    return ptype in PRESENTATION_TYPES
+
+# Get presentation type info
+def get_presentation_type_info(ptype):
+    """Get presentation type configuration"""
+    return PRESENTATION_TYPES.get(ptype, PRESENTATION_TYPES['business'])
 
 def limit_slide_content(content, max_length=300):
     """Limit slide content to maximum character length"""
@@ -1366,6 +1449,7 @@ def create_presentation_api():
         num_slides = data.get('num_slides', 5)
         language = data.get('language', 'en')  # Get language from frontend
         theme = data.get('theme', 'light')  # Get theme from frontend
+        presentation_type = data.get('presentation_type', 'business')  # Get presentation type
         
         # Validation
         if not topic:
@@ -1373,6 +1457,10 @@ def create_presentation_api():
         
         if not isinstance(num_slides, int) or num_slides < 3 or num_slides > 10:
             return jsonify({'error': 'Number of slides must be between 3 and 10'}), 400
+        
+        # Validate presentation type
+        if not validate_presentation_type(presentation_type):
+            return jsonify({'error': f'Invalid presentation type. Must be one of: {list(PRESENTATION_TYPES.keys())}'}), 400
         
         # Check API keys
         if not OPENAI_API_KEY:
@@ -1382,7 +1470,7 @@ def create_presentation_api():
             return jsonify({'error': 'Pexels API key not configured'}), 500
         
         # Generate slide content in the selected language
-        print(f"Generating content for topic: {topic}, slides: {num_slides}, language: {language}")
+        print(f"Generating content for topic: {topic}, slides: {num_slides}, language: {language}, type: {presentation_type}")
         slides_data = generate_slide_content_in_language(topic, num_slides, language)
         
         if not slides_data:
@@ -1398,11 +1486,29 @@ def create_presentation_api():
         # Create presentation with the selected theme
         print("Creating presentation with theme:", theme)
         filepath = create_presentation(topic, slides_data, theme)
+        filename = os.path.basename(filepath)
+        
+        # Save presentation to database if user is authenticated
+        if current_user.is_authenticated:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''INSERT INTO presentations (user_id, topic, num_slides, filename, presentation_type) 
+                       VALUES (?, ?, ?, ?, ?)''',
+                    (current_user.id, topic, num_slides, filename, presentation_type)
+                )
+                conn.commit()
+                conn.close()
+                print(f"✅ Presentation saved to database for user {current_user.id}")
+            except Exception as e:
+                print(f"⚠️ Error saving presentation to database: {e}")
         
         return jsonify({
             'success': True,
-            'filename': os.path.basename(filepath),
-            'slides': slides_data
+            'filename': filename,
+            'slides': slides_data,
+            'presentation_type': presentation_type
         })
         
     except Exception as e:
@@ -1440,6 +1546,17 @@ def download_presentation(filename):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/presentation-types', methods=['GET'])
+def get_presentation_types():
+    """
+    API endpoint to get all available presentation types
+    """
+    return jsonify({
+        'success': True,
+        'types': PRESENTATION_TYPES
+    })
 
 
 # Admin routes
@@ -1704,8 +1821,9 @@ def user_dashboard():
     if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
         return redirect(url_for('admin_dashboard'))
     
-    # Get search and pagination parameters
+    # Get search, filter and pagination parameters
     search_query = request.args.get('search', '').strip()
+    filter_type = request.args.get('type', '').strip()  # Filter by presentation type
     page = request.args.get('page', 1, type=int)
     per_page = 15
     
@@ -1722,21 +1840,28 @@ def user_dashboard():
         )
         total_presentations = cursor.fetchone()['count']
         
-        # Build query with search
-        if search_query:
-            cursor.execute(
-                '''SELECT * FROM presentations 
-                   WHERE user_id = ? AND topic LIKE ? 
-                   ORDER BY creation_date DESC''',
-                (current_user.id, f'%{search_query}%')
-            )
-        else:
-            cursor.execute(
-                'SELECT * FROM presentations WHERE user_id = ? ORDER BY creation_date DESC',
-                (current_user.id,)
-            )
+        # Build query with search and type filter
+        query = 'SELECT * FROM presentations WHERE user_id = ?'
+        params = [current_user.id]
         
+        if search_query:
+            query += ' AND topic LIKE ?'
+            params.append(f'%{search_query}%')
+        
+        if filter_type and validate_presentation_type(filter_type):
+            query += ' AND presentation_type = ?'
+            params.append(filter_type)
+        
+        query += ' ORDER BY creation_date DESC'
+        
+        cursor.execute(query, params)
         all_presentations = [dict(row) for row in cursor.fetchall()]
+        
+        # Add presentation type info to each presentation
+        for pres in all_presentations:
+            if not pres.get('presentation_type'):
+                pres['presentation_type'] = 'business'  # Default for old presentations
+            pres['type_info'] = get_presentation_type_info(pres['presentation_type'])
         
         # Get user data
         cursor.execute('SELECT * FROM users WHERE id = ?', (current_user.id,))
@@ -1768,7 +1893,9 @@ def user_dashboard():
         user_data=user_data,
         page=page,
         total_pages=total_pages,
-        search_query=search_query
+        search_query=search_query,
+        filter_type=filter_type,
+        presentation_types=PRESENTATION_TYPES
     )
 
 @app.route('/presentation/delete', methods=['POST'])
@@ -1926,4 +2053,4 @@ if __name__ == '__main__':
     print(f"LibreTranslate reachable: {is_libretranslate_available()}")
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting on port: {port}")
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0', port=port)

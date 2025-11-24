@@ -1,29 +1,29 @@
 // DOM Elements
-const presentationForm = document.getElementById('presentationForm');
-const formSection = document.getElementById('formSection');
-const loadingSection = document.getElementById('loadingSection');
-const previewSection = document.getElementById('previewSection');
-const errorSection = document.getElementById('errorSection');
+let presentationForm;
+let formSection;
+let loadingSection;
+let previewSection;
+let errorSection;
 
-const topicInput = document.getElementById('topic');
-const numSlidesInput = document.getElementById('numSlides');
-const submitBtn = document.getElementById('submitBtn');
+let topicInput;
+let numSlidesInput;
+let submitBtn;
 
-const step1 = document.getElementById('step1');
-const step2 = document.getElementById('step2');
-const step3 = document.getElementById('step3');
+let step1;
+let step2;
+let step3;
 
-const previewTopic = document.getElementById('previewTopic');
-const previewSlideCount = document.getElementById('previewSlideCount');
-const slidesPreview = document.getElementById('slidesPreview');
+let previewTopic;
+let previewSlideCount;
+let slidesPreview;
 
-const downloadBtn = document.getElementById('downloadBtn');
-const createNewBtn = document.getElementById('createNewBtn');
-const tryAgainBtn = document.getElementById('tryAgainBtn');
+let downloadBtn;
+let createNewBtn;
+let tryAgainBtn;
 
-const errorMessage = document.getElementById('errorMessage');
-const languageSelect = document.getElementById('languageSelect');
-const htmlRoot = document.getElementById('htmlRoot');
+let errorMessage;
+let languageSelect;
+let htmlRoot;
 
 // Global variables
 let currentFilename = null;
@@ -82,6 +82,9 @@ function applyTranslations(lang) {
     // Update presentation theme names in dropdown
     updatePresentationThemeDropdown(lang);
     
+    // Update presentation type names in dropdown
+    updatePresentationTypeDropdown(lang);
+    
     // Save to localStorage
     localStorage.setItem('preferredLanguage', lang);
 }
@@ -105,47 +108,108 @@ function updatePresentationThemeDropdown(lang) {
     });
 }
 
+function updatePresentationTypeDropdown(lang) {
+    const presentationTypeSelect = document.getElementById('presentationType');
+    if (!presentationTypeSelect) {
+        return;
+    }
+    
+    const typeOptions = presentationTypeSelect.querySelectorAll('option');
+    if (!typeOptions || typeOptions.length === 0) {
+        return;
+    }
+    
+    typeOptions.forEach(option => {
+        const typeKey = option.value;
+        if (presentationTypeNames[lang] && presentationTypeNames[lang][typeKey]) {
+            option.textContent = presentationTypeNames[lang][typeKey];
+        }
+    });
+}
+
 function t(key) {
     return translations[currentLanguage][key] || key;
 }
 
 // Language selector event
-if (languageSelect) {
-    languageSelect.addEventListener('change', (e) => {
-        applyTranslations(e.target.value);
-    });
+function initEventListeners() {
+    if (languageSelect) {
+        languageSelect.addEventListener('change', (e) => {
+            applyTranslations(e.target.value);
+        });
+    }
+
+    // Form submission
+    if (presentationForm) {
+        presentationForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const topic = topicInput.value.trim();
+            const numSlides = parseInt(numSlidesInput.value);
+            const presentationTheme = document.getElementById('presentationTheme').value;
+            const presentationType = document.getElementById('presentationType').value;
+            
+            // Validation
+            if (!topic) {
+                showError(t('errorTopicRequired'));
+                return;
+            }
+            
+            if (numSlides < 3 || numSlides > 10) {
+                showError(t('errorSlidesRange'));
+                return;
+            }
+            
+            // Start presentation creation
+            createPresentation(topic, numSlides, presentationTheme, presentationType);
+        });
+    }
+
+    // Download button handler
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', () => {
+            if (currentFilename) {
+                window.location.href = `/api/download/${currentFilename}`;
+            }
+        });
+    }
+
+    // Create new presentation button handler
+    if (createNewBtn) {
+        createNewBtn.addEventListener('click', () => {
+            previewSection.classList.add('hidden');
+            formSection.classList.remove('hidden');
+            
+            // Reset form
+            topicInput.value = '';
+            numSlidesInput.value = 5;
+            currentFilename = null;
+        });
+    }
+
+    // Try again button handler
+    if (tryAgainBtn) {
+        tryAgainBtn.addEventListener('click', () => {
+            errorSection.classList.add('hidden');
+            formSection.classList.remove('hidden');
+        });
+    }
+
+    // Input validation feedback
+    if (numSlidesInput) {
+        numSlidesInput.addEventListener('input', (e) => {
+            const value = parseInt(e.target.value);
+            if (value < 3 || value > 10) {
+                e.target.style.borderColor = 'var(--color-error)';
+            } else {
+                e.target.style.borderColor = '';
+            }
+        });
+    }
 }
 
-// Initialize language on page load
-initLanguage();
-
-// Note: UI theme management removed as per memory - themes only apply to presentations, not landing page
-
-// Form submission
-presentationForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const topic = topicInput.value.trim();
-    const numSlides = parseInt(numSlidesInput.value);
-    const presentationTheme = document.getElementById('presentationTheme').value; // Get selected theme
-    
-    // Validation
-    if (!topic) {
-        showError(t('errorTopicRequired'));
-        return;
-    }
-    
-    if (numSlides < 3 || numSlides > 10) {
-        showError(t('errorSlidesRange'));
-        return;
-    }
-    
-    // Start presentation creation
-    createPresentation(topic, numSlides, presentationTheme);
-});
-
 // Create presentation function
-async function createPresentation(topic, numSlides, theme) {
+async function createPresentation(topic, numSlides, theme, presentationType) {
     // Show loading section
     formSection.classList.add('hidden');
     errorSection.classList.add('hidden');
@@ -165,7 +229,8 @@ async function createPresentation(topic, numSlides, theme) {
                 topic: topic,
                 num_slides: numSlides,
                 language: currentLanguage,  // Send selected language to backend
-                theme: theme  // Send selected presentation theme to backend
+                theme: theme,  // Send selected presentation theme to backend
+                presentation_type: presentationType  // Send presentation type
             })
         });
         
@@ -285,37 +350,45 @@ function showError(message) {
     errorMessage.textContent = message;
 }
 
-// Download button handler
-downloadBtn.addEventListener('click', () => {
-    if (currentFilename) {
-        window.location.href = `/api/download/${currentFilename}`;
-    }
-});
+// Initialize DOM elements
+function initDOMElements() {
+    presentationForm = document.getElementById('presentationForm');
+    formSection = document.getElementById('formSection');
+    loadingSection = document.getElementById('loadingSection');
+    previewSection = document.getElementById('previewSection');
+    errorSection = document.getElementById('errorSection');
 
-// Create new presentation button handler
-createNewBtn.addEventListener('click', () => {
-    previewSection.classList.add('hidden');
-    formSection.classList.remove('hidden');
-    
-    // Reset form
-    topicInput.value = '';
-    numSlidesInput.value = 5;
-    currentFilename = null;
-});
+    topicInput = document.getElementById('topic');
+    numSlidesInput = document.getElementById('numSlides');
+    submitBtn = document.getElementById('submitBtn');
 
-// Try again button handler
-tryAgainBtn.addEventListener('click', () => {
-    errorSection.classList.add('hidden');
-    formSection.classList.remove('hidden');
-});
+    step1 = document.getElementById('step1');
+    step2 = document.getElementById('step2');
+    step3 = document.getElementById('step3');
 
-// Input validation feedback
-numSlidesInput.addEventListener('input', (e) => {
-    const value = parseInt(e.target.value);
-    
-    if (value < 3) {
-        e.target.value = 3;
-    } else if (value > 10) {
-        e.target.value = 10;
-    }
-});
+    previewTopic = document.getElementById('previewTopic');
+    previewSlideCount = document.getElementById('previewSlideCount');
+    slidesPreview = document.getElementById('slidesPreview');
+
+    downloadBtn = document.getElementById('downloadBtn');
+    createNewBtn = document.getElementById('createNewBtn');
+    tryAgainBtn = document.getElementById('tryAgainBtn');
+
+    errorMessage = document.getElementById('errorMessage');
+    languageSelect = document.getElementById('languageSelect');
+    htmlRoot = document.getElementById('htmlRoot');
+}
+
+// Initialize application when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        initDOMElements();
+        initLanguage();
+        initEventListeners();
+    });
+} else {
+    // DOM already loaded
+    initDOMElements();
+    initLanguage();
+    initEventListeners();
+}

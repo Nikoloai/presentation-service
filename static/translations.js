@@ -13,6 +13,8 @@ const translations = {
         slidesHint: "Choose between 3 and 10 slides",
         themeLabel: "Presentation Theme",
         themeHint: "Select the theme for your presentation slides",
+        typeLabel: "Presentation Type",
+        typeHint: "Choose the type for optimal structure",
         createButton: "Create Presentation",
         
         // Loading
@@ -56,6 +58,8 @@ const translations = {
         slidesHint: "Elige entre 3 y 10 diapositivas",
         themeLabel: "Tema de Presentación",
         themeHint: "Selecciona el tema para tus diapositivas de presentación",
+        typeLabel: "Tipo de Presentación",
+        typeHint: "Elige el tipo para una estructura óptima",
         createButton: "Crear Presentación",
         
         // Loading
@@ -99,6 +103,8 @@ const translations = {
         slidesHint: "Выберите от 3 до 10 слайдов",
         themeLabel: "Тема Презентации",
         themeHint: "Выберите тему для оформления слайдов презентации",
+        typeLabel: "Тип Презентации",
+        typeHint: "Выберите тип для оптимальной структуры",
         createButton: "Создать Презентацию",
         
         // Loading
@@ -142,6 +148,8 @@ const translations = {
         slidesHint: "选择3到10张幻灯片",
         themeLabel: "演示文稿主题",
         themeHint: "选择演示文稿幻灯片的主题",
+        typeLabel: "演示文稿类型",
+        typeHint: "选择类型以获得最佳结构",
         createButton: "创建演示文稿",
         
         // Loading
@@ -185,6 +193,8 @@ const translations = {
         slidesHint: "Choisissez entre 3 et 10 diapositives",
         themeLabel: "Thème de Présentation",
         themeHint: "Sélectionnez le thème pour vos diapositives de présentation",
+        typeLabel: "Type de Présentation",
+        typeHint: "Choisissez le type pour une structure optimale",
         createButton: "Créer une Présentation",
         
         // Loading
@@ -225,7 +235,41 @@ const languageNames = {
     fr: "Français"
 };
 
+// Presentation type names for dropdown
+const presentationTypeNames = {
+    en: {
+        business: "💼 Business Presentation",
+        sales: "💰 Sales Pitch",
+        investor: "📈 Investor Pitch",
+        educational: "🎓 Educational"
+    },
+    es: {
+        business: "💼 Presentación Empresarial",
+        sales: "💰 Presentación de Ventas",
+        investor: "📈 Presentación para Inversores",
+        educational: "🎓 Educativa"
+    },
+    ru: {
+        business: "💼 Бизнес-презентация",
+        sales: "💰 Продажи",
+        investor: "📈 Инвестиционный питч",
+        educational: "🎓 Образовательная"
+    },
+    zh: {
+        business: "💼 商务演示",
+        sales: "💰 销售演示",
+        investor: "📈 投资者演示",
+        educational: "🎓 教育演示"
+    },
+    fr: {
+        business: "💼 Présentation Professionnelle",
+        sales: "💰 Présentation Commerciale",
+        investor: "📈 Présentation pour Investisseurs",
+        educational: "🎓 Éducative"
+    }
+};
+
 // Export for use in other scripts
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { translations, languageNames };
+    module.exports = { translations, languageNames, presentationTypeNames };
 }

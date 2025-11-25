@@ -9,7 +9,8 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect,
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from authlib.integrations.flask_client import OAuth
+import firebase_admin
+from firebase_admin import credentials, auth as firebase_auth
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
@@ -28,19 +29,59 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
 
-# Initialize OAuth
-oauth = OAuth(app)
+# ============================================================================
+# Firebase Admin SDK Initialization
+# ============================================================================
+# This section initializes Firebase Admin SDK for server-side authentication
+# The SDK requires a service account key JSON file for secure communication
+# with Firebase services
 
-# Google OAuth Configuration
-google = oauth.register(
-    name='google',
-    client_id=os.getenv('GOOGLE_CLIENT_ID'),
-    client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={
-        'scope': 'openid email profile'
-    }
-)
+try:
+    # Step 1: Get service account key path from environment or use default
+    firebase_cred_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY', 'serviceAccountKey.json')
+    print(f"🔍 Checking Firebase service account key at: {firebase_cred_path}")
+    
+    # Step 2: Verify that the service account key file exists
+    if not os.path.exists(firebase_cred_path):
+        raise FileNotFoundError(f"Service account key not found at: {firebase_cred_path}")
+    
+    # Step 3: Validate JSON format and required fields
+    with open(firebase_cred_path, 'r') as f:
+        key_data = json.load(f)
+        required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
+        missing_fields = [field for field in required_fields if field not in key_data]
+        
+        if missing_fields:
+            raise ValueError(f"Service account key missing required fields: {missing_fields}")
+        
+        if key_data.get('type') != 'service_account':
+            raise ValueError(f"Invalid key type: expected 'service_account', got '{key_data.get('type')}'")
+        
+        print(f"✅ Service account key validated: Project ID = {key_data.get('project_id')}")
+    
+    # Step 4: Initialize Firebase Admin SDK with credentials
+    cred = credentials.Certificate(firebase_cred_path)
+    firebase_admin.initialize_app(cred)
+    
+    print("✅ Firebase Admin SDK initialized successfully")
+    print("   → Token verification: ENABLED")
+    print("   → User authentication: READY")
+    
+except FileNotFoundError as e:
+    print(f"⚠️ Firebase initialization failed: {e}")
+    print("   → Firebase authentication will NOT work")
+    print("   → Please add serviceAccountKey.json to project root")
+    print("   → Download from: Firebase Console → Project Settings → Service Accounts")
+    
+except ValueError as e:
+    print(f"⚠️ Firebase initialization failed: {e}")
+    print("   → Invalid or corrupted service account key")
+    print("   → Please download a new key from Firebase Console")
+    
+except Exception as e:
+    print(f"⚠️ Firebase initialization error: {e}")
+    print(f"   → Error type: {type(e).__name__}")
+    print("   → Firebase authentication may not work correctly")
 
 # Initialize Flask-Login
 login_manager = LoginManager()
@@ -102,6 +143,200 @@ def load_user(user_id):
         picture=user_data.get('picture')
     )
 
+# Helper functions for Firebase user management
+def get_or_create_firebase_user(firebase_uid, email, name='', picture=''):
+    """
+    Get existing user by Firebase UID or create new one
+    Returns (user_data, error)
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Try to find user by Firebase UID
+        cursor.execute('SELECT * FROM users WHERE firebase_uid = ?', (firebase_uid,))
+        user = cursor.fetchone()
+        
+        if user:
+            # User exists, return their data
+            conn.close()
+            return dict(user), None
+        
+        # Check if user exists by email (migrating from email/password auth)
+        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+        user = cursor.fetchone()
+        
+        if user:
+            # Update existing user with Firebase UID
+            cursor.execute(
+                'UPDATE users SET firebase_uid = ?, name = ?, picture = ? WHERE email = ?',
+                (firebase_uid, name, picture, email)
+            )
+            conn.commit()
+            cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+            user = cursor.fetchone()
+            conn.close()
+            return dict(user), None
+        
+        # Create new user
+        cursor.execute(
+            '''INSERT INTO users (email, firebase_uid, name, picture, status)
+               VALUES (?, ?, ?, ?, 'active')''',
+            (email, firebase_uid, name, picture)
+        )
+        conn.commit()
+        user_id = cursor.lastrowid
+        
+        cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+        user = cursor.fetchone()
+        conn.close()
+        
+        return dict(user), None
+        
+    except Exception as e:
+        print(f"Error in get_or_create_firebase_user: {e}")
+        return None, str(e)
+
+# Helper functions for email/password authentication
+def validate_email(email):
+    """
+    Validate email format
+    Returns (is_valid, error_message)
+    """
+    if not email or len(email) < 3:
+        return False, "Email is too short"
+    if '@' not in email or '.' not in email:
+        return False, "Invalid email format"
+    if len(email) > 255:
+        return False, "Email is too long"
+    return True, None
+
+def validate_password(password):
+    """
+    Validate password strength
+    Returns (is_valid, error_message)
+    """
+    if not password or len(password) < 6:
+        return False, "Password must be at least 6 characters"
+    if len(password) > 128:
+        return False, "Password is too long"
+    return True, None
+
+def create_user(email, password):
+    """
+    Create new user with email and password
+    Returns (user_id, error)
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if user already exists
+        cursor.execute('SELECT id FROM users WHERE email = ?', (email,))
+        if cursor.fetchone():
+            conn.close()
+            return None, "User with this email already exists"
+        
+        # Create user
+        password_hash = generate_password_hash(password)
+        cursor.execute(
+            '''INSERT INTO users (email, password_hash, status)
+               VALUES (?, ?, 'active')''',
+            (email, password_hash)
+        )
+        conn.commit()
+        user_id = cursor.lastrowid
+        conn.close()
+        
+        return user_id, None
+        
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        return None, "Failed to create user"
+
+def authenticate_user(email, password):
+    """
+    Authenticate user with email and password
+    Returns (user_data, error)
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if not user:
+            return None, "Invalid email or password"
+        
+        if not user['password_hash']:
+            return None, "Please sign in with Firebase/Google"
+        
+        if not check_password_hash(user['password_hash'], password):
+            return None, "Invalid email or password"
+        
+        if user['status'] == 'blocked':
+            return None, "Your account has been blocked"
+        
+        return dict(user), None
+        
+    except Exception as e:
+        print(f"Error authenticating user: {e}")
+        return None, "Authentication failed"
+
+# Admin helper functions
+def get_all_users():
+    """
+    Get all users from database
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users ORDER BY registration_date DESC')
+        users = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return users
+    except Exception as e:
+        print(f"Error fetching users: {e}")
+        return []
+
+def update_user_status(user_id, status):
+    """
+    Update user status (active/blocked)
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET status = ? WHERE id = ?', (status, user_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error updating user status: {e}")
+        return False
+
+def delete_user(user_id):
+    """
+    Delete user and their presentations
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        # Delete user's presentations first
+        cursor.execute('DELETE FROM presentations WHERE user_id = ?', (user_id,))
+        # Delete user
+        cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error deleting user: {e}")
+        return False
+
 # API Keys from environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
@@ -133,6 +368,7 @@ def init_db():
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT,
             google_id TEXT UNIQUE,
+            firebase_uid TEXT UNIQUE,
             name TEXT,
             picture TEXT,
             status TEXT DEFAULT 'active',
@@ -153,6 +389,21 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
+    
+    # Migration: Add firebase_uid column if it doesn't exist
+    # Note: SQLite ALTER TABLE does not support adding UNIQUE constraint directly
+    # We add the column first, then create a unique index separately
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'firebase_uid' not in columns:
+        # Step 1: Add firebase_uid column without UNIQUE constraint
+        cursor.execute('ALTER TABLE users ADD COLUMN firebase_uid TEXT')
+        print("✅ Migration: Added firebase_uid column to users table")
+        
+        # Step 2: Create unique index on firebase_uid column
+        # This ensures uniqueness while allowing NULL values
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_firebase_uid ON users(firebase_uid)')
+        print("✅ Migration: Created unique index on firebase_uid column")
     
     # Migration: Add presentation_type column if it doesn't exist
     cursor.execute("PRAGMA table_info(presentations)")
@@ -1543,72 +1794,59 @@ def admin_users():
         search_query=search_query
     )
 
-# Google OAuth routes
-@app.route('/auth/google')
-def google_login():
-    """Initiate Google OAuth login"""
-    redirect_uri = url_for('google_callback', _external=True)
-    return google.authorize_redirect(redirect_uri)
-
-@app.route('/auth/google/callback')
-def google_callback():
-    """Handle Google OAuth callback"""
+# Firebase Authentication routes
+@app.route('/auth/firebase/', methods=['POST'])
+def firebase_auth_route():
+    """Handle Firebase authentication"""
     try:
-        # Get access token
-        token = google.authorize_access_token()
+        data = request.get_json()
+        id_token = data.get('token')
         
-        # Get user info
-        user_info = token.get('userinfo')
-        if not user_info:
-            flash('❌ Failed to get user information from Google', 'error')
-            return redirect(url_for('login'))
+        if not id_token:
+            return jsonify({'error': 'Token is required'}), 400
         
-        google_id = user_info.get('sub')
-        email = user_info.get('email')
-        name = user_info.get('name')
-        picture = user_info.get('picture')
+        # Verify Firebase ID token
+        try:
+            decoded_token = firebase_auth.verify_id_token(id_token)
+        except Exception as e:
+            print(f"Firebase token verification error: {e}")
+            return jsonify({'error': 'Invalid token'}), 401
         
-        if not google_id or not email:
-            flash('❌ Invalid Google account data', 'error')
-            return redirect(url_for('login'))
+        firebase_uid = decoded_token['uid']
+        email = decoded_token.get('email')
+        name = decoded_token.get('name', '')
+        picture = decoded_token.get('picture', '')
+        
+        if not email:
+            return jsonify({'error': 'Email not found in token'}), 400
         
         # Get or create user
-        user_data, error = get_or_create_google_user(google_id, email, name, picture)
+        user_data, error = get_or_create_firebase_user(firebase_uid, email, name, picture)
         if error:
-            flash(f'❌ {error}', 'error')
-            return redirect(url_for('login'))
+            return jsonify({'error': error}), 500
         
         if user_data['status'] == 'blocked':
-            flash('❌ Your account has been blocked. Please contact support.', 'error')
-            return redirect(url_for('login'))
+            return jsonify({'error': 'Your account has been blocked. Please contact support.'}), 403
         
         # Login user
         user = User(
-            user_data['id'], 
-            email=user_data['email'], 
+            user_data['id'],
+            email=user_data['email'],
             is_admin_user=False,
             name=user_data.get('name'),
             picture=user_data.get('picture')
         )
         login_user(user, remember=True)
         
-        # Check if this is a new user (just created)
-        if user_data.get('registration_date'):
-            from datetime import datetime, timedelta
-            reg_date = datetime.fromisoformat(user_data['registration_date'])
-            if datetime.now() - reg_date < timedelta(seconds=5):
-                flash('✅ Welcome to AI SlideRush! Your account has been created.', 'success')
-            else:
-                flash('✅ Welcome back!', 'success')
-        else:
-            flash('✅ Logged in successfully!', 'success')
-        
-        return redirect(url_for('user_dashboard'))
+        return jsonify({
+            'success': True,
+            'message': 'Logged in successfully',
+            'redirect': url_for('user_dashboard')
+        })
         
     except Exception as e:
-        print(f"Google OAuth error: {e}")
-        flash('❌ Authentication failed. Please try again.', 'error')
-        return redirect(url_for('login'))
+        print(f"Firebase auth error: {e}")
+        return jsonify({'error': 'Authentication failed'}), 500
 
 # User authentication routes
 @app.route('/signup', methods=['GET', 'POST'])

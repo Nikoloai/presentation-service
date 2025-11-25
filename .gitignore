@@ -39,3 +39,5 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+
+serviceAccountKey.json

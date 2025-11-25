@@ -36,6 +36,9 @@ app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-product
 # The SDK requires a service account key JSON file for secure communication
 # with Firebase services
 
+# Global flag to track Firebase initialization status
+FIREBASE_INITIALIZED = False
+
 try:
     # Step 1: Get service account key path from environment or use default
     firebase_cred_path = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY', 'serviceAccountKey.json')
@@ -45,8 +48,8 @@ try:
     if not os.path.exists(firebase_cred_path):
         raise FileNotFoundError(f"Service account key not found at: {firebase_cred_path}")
     
-    # Step 3: Validate JSON format and required fields
-    with open(firebase_cred_path, 'r') as f:
+    # Step 3: Validate JSON format and required fields with explicit UTF-8 encoding
+    with open(firebase_cred_path, 'r', encoding='utf-8') as f:
         key_data = json.load(f)
         required_fields = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email']
         missing_fields = [field for field in required_fields if field not in key_data]
@@ -60,28 +63,37 @@ try:
         print(f"✅ Service account key validated: Project ID = {key_data.get('project_id')}")
     
     # Step 4: Initialize Firebase Admin SDK with credentials
-    cred = credentials.Certificate(firebase_cred_path)
-    firebase_admin.initialize_app(cred)
-    
-    print("✅ Firebase Admin SDK initialized successfully")
-    print("   → Token verification: ENABLED")
-    print("   → User authentication: READY")
+    # Check if already initialized to prevent reinitialization errors
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(firebase_cred_path)
+        firebase_admin.initialize_app(cred)
+        FIREBASE_INITIALIZED = True
+        
+        print("✅ Firebase Admin SDK initialized successfully")
+        print("   → Token verification: ENABLED")
+        print("   → User authentication: READY")
+    else:
+        print("ℹ️ Firebase Admin SDK already initialized")
+        FIREBASE_INITIALIZED = True
     
 except FileNotFoundError as e:
     print(f"⚠️ Firebase initialization failed: {e}")
     print("   → Firebase authentication will NOT work")
     print("   → Please add serviceAccountKey.json to project root")
     print("   → Download from: Firebase Console → Project Settings → Service Accounts")
+    FIREBASE_INITIALIZED = False
     
 except ValueError as e:
     print(f"⚠️ Firebase initialization failed: {e}")
     print("   → Invalid or corrupted service account key")
     print("   → Please download a new key from Firebase Console")
+    FIREBASE_INITIALIZED = False
     
 except Exception as e:
     print(f"⚠️ Firebase initialization error: {e}")
     print(f"   → Error type: {type(e).__name__}")
     print("   → Firebase authentication may not work correctly")
+    FIREBASE_INITIALIZED = False
 
 # Initialize Flask-Login
 login_manager = LoginManager()
@@ -149,6 +161,7 @@ def get_or_create_firebase_user(firebase_uid, email, name='', picture=''):
     Get existing user by Firebase UID or create new one
     Returns (user_data, error)
     """
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -160,7 +173,6 @@ def get_or_create_firebase_user(firebase_uid, email, name='', picture=''):
         
         if user:
             # User exists, return their data
-            conn.close()
             return dict(user), None
         
         # Check if user exists by email (migrating from email/password auth)
@@ -176,7 +188,6 @@ def get_or_create_firebase_user(firebase_uid, email, name='', picture=''):
             conn.commit()
             cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
             user = cursor.fetchone()
-            conn.close()
             return dict(user), None
         
         # Create new user
@@ -190,13 +201,21 @@ def get_or_create_firebase_user(firebase_uid, email, name='', picture=''):
         
         cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
         user = cursor.fetchone()
-        conn.close()
-        
         return dict(user), None
         
+    except sqlite3.Error as e:
+        if conn:
+            conn.rollback()
+        print(f"Database error in get_or_create_firebase_user: {e}")
+        return None, f"Database error: {str(e)}"
     except Exception as e:
+        if conn:
+            conn.rollback()
         print(f"Error in get_or_create_firebase_user: {e}")
         return None, str(e)
+    finally:
+        if conn:
+            conn.close()
 
 # Helper functions for email/password authentication
 def validate_email(email):
@@ -358,62 +377,84 @@ DB_PATH = 'users.db'
 
 def init_db():
     """Initialize the database with users table"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create users table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT,
-            google_id TEXT UNIQUE,
-            firebase_uid TEXT UNIQUE,
-            name TEXT,
-            picture TEXT,
-            status TEXT DEFAULT 'active',
-            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Create presentations table to track user activity
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS presentations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            topic TEXT NOT NULL,
-            num_slides INTEGER,
-            filename TEXT,
-            presentation_type TEXT DEFAULT 'business',
-            creation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    # Migration: Add firebase_uid column if it doesn't exist
-    # Note: SQLite ALTER TABLE does not support adding UNIQUE constraint directly
-    # We add the column first, then create a unique index separately
-    cursor.execute("PRAGMA table_info(users)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if 'firebase_uid' not in columns:
-        # Step 1: Add firebase_uid column without UNIQUE constraint
-        cursor.execute('ALTER TABLE users ADD COLUMN firebase_uid TEXT')
-        print("✅ Migration: Added firebase_uid column to users table")
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
         
-        # Step 2: Create unique index on firebase_uid column
-        # This ensures uniqueness while allowing NULL values
-        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_firebase_uid ON users(firebase_uid)')
-        print("✅ Migration: Created unique index on firebase_uid column")
-    
-    # Migration: Add presentation_type column if it doesn't exist
-    cursor.execute("PRAGMA table_info(presentations)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if 'presentation_type' not in columns:
-        cursor.execute('ALTER TABLE presentations ADD COLUMN presentation_type TEXT DEFAULT "business"')
-        print("✅ Migration: Added presentation_type column to presentations table")
-    
-    conn.commit()
-    conn.close()
+        # Create users table
+        # Note: firebase_uid is added via migration below, not in CREATE TABLE
+        # to avoid conflicts with existing databases
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT,
+                google_id TEXT UNIQUE,
+                name TEXT,
+                picture TEXT,
+                status TEXT DEFAULT 'active',
+                registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create presentations table to track user activity
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS presentations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                topic TEXT NOT NULL,
+                num_slides INTEGER,
+                filename TEXT,
+                presentation_type TEXT DEFAULT 'business',
+                creation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Migration: Add firebase_uid column if it doesn't exist
+        # Note: SQLite ALTER TABLE does not support adding UNIQUE constraint directly
+        # We add the column first, then create a unique index separately
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'firebase_uid' not in columns:
+            # Step 1: Add firebase_uid column without UNIQUE constraint
+            cursor.execute('ALTER TABLE users ADD COLUMN firebase_uid TEXT')
+            print("✅ Migration: Added firebase_uid column to users table")
+        
+        # Check if unique index exists (separate from column check)
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_firebase_uid'")
+        index_exists = cursor.fetchone() is not None
+        
+        if not index_exists:
+            # Step 2: Create unique index on firebase_uid column
+            # This ensures uniqueness while allowing NULL values
+            cursor.execute('CREATE UNIQUE INDEX idx_firebase_uid ON users(firebase_uid)')
+            print("✅ Migration: Created unique index on firebase_uid column")
+        
+        # Migration: Add presentation_type column if it doesn't exist
+        cursor.execute("PRAGMA table_info(presentations)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'presentation_type' not in columns:
+            cursor.execute('ALTER TABLE presentations ADD COLUMN presentation_type TEXT DEFAULT "business"')
+            print("✅ Migration: Added presentation_type column to presentations table")
+        
+        conn.commit()
+        
+    except sqlite3.Error as e:
+        print(f"❌ Database initialization error: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as e:
+        print(f"❌ Unexpected error during database initialization: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 # Initialize database on startup
 init_db()
@@ -718,52 +759,74 @@ def generate_slide_content_in_language(topic, num_slides, language='en', present
 
 СОВЕТ ПО СТИЛЮ: {tips}
 
-ВАЖНО: Презентация должна состоять из ТЕЗИСОВ, а не описаний!
-Используй рекомендованную структуру как ориентир, но адаптируй её под тему "{topic}".
+🎯 КРИТИЧЕСКИ ВАЖНЫЕ ТРЕБОВАНИЯ К КАЧЕСТВУ:
 
-ТЕЗИС — это ключевое утверждение, которое раскрывает часть темы.
-НЕ просто описывай, а формулируй конкретные идеи и аргументы.
+1. ГЛУБИНА И УНИКАЛЬНОСТЬ:
+   • Каждый слайд должен содержать НЕОЖИДАННЫЕ факты, малоизвестные данные или оригинальные инсайты
+   • НЕ ограничивайся общеизвестной информацией - углубляйся в нишевые детали
+   • Каждый слайд уникален по углу рассмотрения темы
+   • Раскрывай информацию для профессионалов и энтузиастов, а не для новичков
 
-СТРУКТУРА ТЕЗИСОВ:
-- Слайд 1: Главная идея темы (основное утверждение)
-- Слайды 2-{num_slides-1}: Ключевые аспекты, преимущества, применения
-- Слайд {num_slides}: Заключение, будущее, вывод
+2. КОНКРЕТИКА И ДОКАЗАТЕЛЬСТВА:
+   • ОБЯЗАТЕЛЬНО указывай: имена исследователей, годы исследований, названия институтов
+   • Приводи точные цифры и статистику (не округляй: вместо "около 100" пиши "127 случаев")
+   • Ссылайся на конкретные кейсы, практические примеры из реальной практики
+   • Если данных нет - выскажи обоснованную гипотезу или критическое размышление
 
-Каждый тезис должен:
-✓ Быть конкретным утверждением, специфичным для темы "{topic}"
-✓ Содержать 2-3 точных предложения с КОНКРЕТНЫМИ деталями и примерами
-✓ Развивать основную тему
-✓ Образовывать логическую цепочку с другими тезисами
-✓ ИЗБЕГАТЬ шаблонных фраз типа "ключевой фактор развития", "цифровая эпоха", "современное общество"
-✓ Использовать СПЕЦИФИЧЕСКУЮ терминологию и факты, относящиеся именно к "{topic}"
+3. ЗАПРЕТ НА ШАБЛОНЫ:
+   • СТРОГО ИЗБЕГАЙ фраз: "в современном мире", "в цифровую эпоху", "ключевой фактор", "новые возможности", "инновационные решения"
+   • НЕ используй одинаковые структуры предложений на разных слайдах
+   • НЕ заканчивай слайды похожими формулировками
+   • Каждый слайд должен иметь свой авторский стиль изложения
 
-Для каждого слайда верни JSON с полями:
-- "title": Краткий заголовок (2-3 слова), специфичный для темы
-- "search_keyword": Ключевые слова для поиска картинки на английском (3-4 слова)
-- "content": ТЕЗИС — конкретное утверждение (2-3 предложения с деталями)
+4. ФОРМАТ КОНТЕНТА:
+   • Каждый слайд: 3-4 предложения с КОНКРЕТНЫМИ деталями
+   • Минимум 1-2 неожиданных факта на слайд
+   • Используй аналогии, сравнения, критический анализ
+   • Последний слайд: прогнозы, открытые вопросы, вызовы для будущих исследований
 
-ПРИМЕР правильных тезисов для темы "Собаки":
+ПРИМЕР ГЛУБОКОГО КОНТЕНТА для темы "Нейросети для диагностики редких болезней у животных":
 {{
   "slides": [
-    {{"title": "Эволюция собак", "search_keyword": "dog evolution wolf domestication", "content": "Собаки произошли от волков около 15 000 лет назад в процессе одомашнивания. Генетические исследования показывают, что первые собаки появились в Восточной Азии и распространились по всему миру вместе с человеком. Современные породы — результат селективного разведения последних 200 лет."}},
-    {{"title": "Породы и их функции", "search_keyword": "dog breeds working dogs types", "content": "Существует более 400 признанных пород собак, каждая выведена для специфических задач. Пастушьи породы (бордер-колли, овчарки) управляют стадами, охотничьи (ретриверы, спаниели) помогают на охоте, а служебные (доберманы, ротвейлеры) охраняют территорию. Декоративные породы (чихуахуа, той-терьеры) выведены исключительно для компаньонства."}},
-    {{"title": "Собачий интеллект", "search_keyword": "dog intelligence training cognition", "content": "Собаки способны запомнить до 165 слов и жестов, что сопоставимо с когнитивными способностями двухлетнего ребёнка. Бордер-колли считаются самой умной породой — они понимают новые команды после 5 повторений. Исследования показывают, что собаки различают человеческие эмоции по выражению лица и тону голоса."}}
+    {{
+      "title": "Проблема гиподиагностики",
+      "search_keyword": "veterinary diagnostics rare disease animals",
+      "content": "Согласно исследованию Dr. Sarah Mitchell (Cornell University, 2022), только 12% редких заболеваний у домашних животных диагностируются при жизни. Основная причина — отсутствие у ветеринаров опыта распознавания атипичных симптомов. В случае синдрома Кушинга у хорьков средний срок до постановки диагноза составляет 8.3 месяца, что критично при средней продолжительности жизни 6-8 лет."
+    }},
+    {{
+      "title": "Архитектура CNN для патологий",
+      "search_keyword": "convolutional neural network medical imaging",
+      "content": "Команда из UC Davis разработала сверточную сеть ResNet-152, обученную на 47,000 гистопатологических изображений экзотических животных. Точность детекции лимфомы у попугаев достигла 94.7%, превысив показатели опытных патологоанатомов (89.2%). Критический момент: сеть выявляет паттерны, невидимые человеческому глазу — анизоцитоз на уровне 3-5 микрон."
+    }},
+    {{
+      "title": "Дилемма малых выборок",
+      "search_keyword": "few shot learning medical AI",
+      "content": "Для болезни фон Виллебранда у доберманов существует только 340 задокументированных случаев с подтвержденной биопсией. Техника few-shot learning с метрическими пространствами (Prototypical Networks) позволила достичь 78% точности при обучении всего на 15 примерах. Однако возникает риск переобучения: модель может запомнить артефакты конкретных клиник, а не истинные паттерны болезни."
+    }},
+    {{
+      "title": "Открытые вызовы",
+      "search_keyword": "AI challenges veterinary medicine future",
+      "content": "Три нерешенных вопроса тормозят внедрение: 1) Отсутствие стандартизации протоколов сбора данных между клиниками (89% баз данных несовместимы); 2) Этическая дилемма — кто несет ответственность при ошибке AI в диагнозе?; 3) Феномен 'distribution shift' — модели, обученные на данных из США, показывают падение точности на 23-31% при тестировании на азиатских породах. Требуются федеративные подходы к обучению."
+    }}
   ]
 }}
 
-НЕПРАВИЛЬНО (шаблонные фразы):
-"Собаки становятся ключевым фактором развития современного общества. Внедрение этих технологий открывает новые возможности."
+НЕПРАВИЛЬНО (шаблоны и общие фразы):
+"Нейросети открывают новые возможности в ветеринарии. В современном мире технологии позволяют диагностировать болезни быстрее."
 
-ПРАВИЛЬНО (конкретные факты):
-"Собаки обладают обонянием в 10 000 раз острее человеческого благодаря 300 миллионам обонятельных рецепторов. Это позволяет им обнаруживать наркотики, взрывчатку и даже диагностировать рак на ранних стадиях."
+ПРАВИЛЬНО (конкретика и глубина):
+"Алгоритм YOLO-v5, адаптированный группой Prof. Chen для рентгенограмм рептилий, обнаруживает метаболическую болезнь костей у игуан с чувствительностью 91.3% — на 34% выше, чем средний показатель герпетологов-практиков."
 
-Возвращай ТОЛЬКО валидный JSON без дополнительного текста.
+ФОРМАТ ОТВЕТА:
+Верни ТОЛЬКО валидный JSON в формате:
+{{
+  "slides": [
+    {{"title": "...", "search_keyword": "...", "content": "..."}},
+    ...
+  ]
+}}
 
-КРИТИЧЕСКИ ВАЖНО: 
-- Каждый тезис должен содержать КОНКРЕТНЫЕ факты, цифры, примеры относящиеся к "{topic}"
-- НЕ используй общие фразы про "технологии", "инновации", "будущее" без конкретики
-- Заголовок и содержание слайда должны ЛОГИЧЕСКИ соответствовать друг другу
-- Каждый search_keyword должен быть РАЗНЫМ и специфичным"""
+Без markdown, без дополнительного текста."""
         elif language == 'es':
             prompt = f"""Crea una presentación estructurada sobre el tema: "{topic}"
 Número de diapositivas: {num_slides}
@@ -912,19 +975,84 @@ CRITIQUE :
 - Le titre et le contenu de chaque diapositive doivent être LIÉS LOGIQUEMENT
 - Chaque search_keyword doit être DIFFÉRENT et spécifique"""
         else:  # Default to English
-            prompt = f"""Create a structured presentation on the topic: "{topic}"
+            type_name_en = type_info.get('name_en', 'Presentation')
+            prompt = f"""Create a structured presentation on topic: "{topic}"
 Number of slides: {num_slides}
+Presentation type: {type_name_en}
 
-IMPORTANT: The presentation must consist of THESIS STATEMENTS, not descriptions!
-Use the structure below as a guide, but adapt it to the topic "{topic}".
+RECOMMENDED STRUCTURE FOR THIS TYPE:
+{structure_text}
 
-THESIS — a key statement that reveals part of the topic.
-Do NOT just describe; formulate specific ideas and arguments.
+STYLE ADVICE: {tips}
 
-FORMAT REQUIREMENTS:
-- Keep paragraphs concise (2-3 sentences)
-- Return ONLY valid JSON with fields: title, search_keyword (English), content
-"""
+🎯 CRITICAL QUALITY REQUIREMENTS:
+
+1. DEPTH AND UNIQUENESS:
+   • Each slide must contain UNEXPECTED facts, little-known data, or original insights
+   • DO NOT limit to common knowledge - dive into niche details
+   • Each slide is unique in its angle of topic exploration
+   • Target professionals and enthusiasts, not beginners
+
+2. SPECIFICITY AND EVIDENCE:
+   • MUST include: researcher names, study years, institution names
+   • Provide exact numbers and statistics (don't round: instead of "about 100" write "127 cases")
+   • Reference specific cases, practical examples from real practice
+   • If no data available - state well-founded hypothesis or critical analysis
+
+3. TEMPLATE BAN:
+   • STRICTLY AVOID phrases: "in modern world", "in digital era", "key factor", "new opportunities", "innovative solutions"
+   • DO NOT use identical sentence structures across slides
+   • DO NOT end slides with similar formulations
+   • Each slide must have its own authorial writing style
+
+4. CONTENT FORMAT:
+   • Each slide: 3-4 sentences with SPECIFIC details
+   • Minimum 1-2 unexpected facts per slide
+   • Use analogies, comparisons, critical analysis
+   • Final slide: forecasts, open questions, challenges for future research
+
+EXAMPLE OF DEEP CONTENT for "Neural networks for diagnosing rare animal diseases":
+{{
+  "slides": [
+    {{
+      "title": "Underdiagnosis Problem",
+      "search_keyword": "veterinary diagnostics rare disease animals",
+      "content": "According to Dr. Sarah Mitchell's study (Cornell University, 2022), only 12% of rare diseases in domestic animals are diagnosed during lifetime. Primary cause: veterinarians lack experience recognizing atypical symptoms. For Cushing's syndrome in ferrets, average time to diagnosis is 8.3 months, critical given 6-8 year lifespan."
+    }},
+    {{
+      "title": "CNN Architecture for Pathology",
+      "search_keyword": "convolutional neural network medical imaging",
+      "content": "UC Davis team developed ResNet-152 convolutional network trained on 47,000 histopathological images of exotic animals. Lymphoma detection accuracy in parrots reached 94.7%, exceeding experienced pathologists (89.2%). Critical: network detects patterns invisible to human eye — anisocytosis at 3-5 micron level."
+    }},
+    {{
+      "title": "Few-Shot Learning Dilemma",
+      "search_keyword": "few shot learning medical AI",
+      "content": "Only 340 documented biopsy-confirmed cases exist for von Willebrand disease in Dobermans. Few-shot learning with metric spaces (Prototypical Networks) achieved 78% accuracy training on just 15 examples. However, overfitting risk emerges: model may memorize artifacts of specific clinics rather than true disease patterns."
+    }},
+    {{
+      "title": "Open Challenges",
+      "search_keyword": "AI challenges veterinary medicine future",
+      "content": "Three unsolved issues hamper adoption: 1) Lack of standardized data collection protocols between clinics (89% databases incompatible); 2) Ethical dilemma — who bears responsibility for AI diagnostic errors?; 3) Distribution shift phenomenon — models trained on US data show 23-31% accuracy drop when tested on Asian breeds. Federated learning approaches required."
+    }}
+  ]
+}}
+
+INCORRECT (templates and generic phrases):
+"Neural networks unlock new opportunities in veterinary medicine. Modern world technologies enable faster disease diagnosis."
+
+CORRECT (specificity and depth):
+"YOLO-v5 algorithm adapted by Prof. Chen's group for reptile X-rays detects metabolic bone disease in iguanas with 91.3% sensitivity — 34% higher than average herpetologist practitioners."
+
+RESPONSE FORMAT:
+Return ONLY valid JSON in format:
+{{
+  "slides": [
+    {{"title": "...", "search_keyword": "...", "content": "..."}},
+    ...
+  ]
+}}
+
+No markdown, no additional text."""
 
 
         data = {
@@ -933,8 +1061,8 @@ FORMAT REQUIREMENTS:
                 {'role': 'system', 'content': f"{system_prompt}\n\nAlways respond with valid JSON only. Generate content in {language_name}."},
                 {'role': 'user', 'content': prompt}
             ],
-            'temperature': 0.7,
-            'max_tokens': 1500
+            'temperature': 0.8,  # Increased for more creative, unique content
+            'max_tokens': 2500  # Increased for detailed, in-depth responses
         }
         
         response = requests.post(

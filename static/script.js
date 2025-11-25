@@ -155,7 +155,7 @@ function initEventListeners() {
                 return;
             }
             
-            if (numSlides < 3 || numSlides > 10) {
+            if (numSlides < 3 || numSlides > 10 || isNaN(numSlides)) {
                 showError(t('errorSlidesRange'));
                 return;
             }
@@ -289,6 +289,15 @@ function animateProgressSteps() {
     }, 2000);
 }
 
+// Simple Markdown renderer for **bold** with HTML escaping
+function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function renderMarkdown(str) {
+    const safe = escapeHtml(str);
+    return safe.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+}
+
 // Show preview
 function showPreview(topic, slides, presentationType) {
     loadingSection.classList.add('hidden');
@@ -334,7 +343,8 @@ function showPreview(topic, slides, presentationType) {
             slideItem.appendChild(warningText);
         }
         
-        slideContent.textContent = content;
+        // Render content with basic markdown (bold)
+        slideContent.innerHTML = renderMarkdown(content);
         
         // Dynamic font size adjustment based on content length
         if (content.length > 200) {

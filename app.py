@@ -48,6 +48,60 @@ login_manager.init_app(app)
 login_manager.login_view = 'admin_login'
 login_manager.login_message = 'Please log in to access this page.'
 
+# Simple admin user storage
+ADMIN_USERS = {
+    'admin': {
+        'password_hash': generate_password_hash(os.getenv('ADMIN_PASSWORD', 'admin123')),
+        'id': 'admin'
+    }
+}
+
+class User(UserMixin):
+    def __init__(self, user_id, email=None, is_admin_user=False, name=None, picture=None):
+        self.id = user_id
+        self.email = email
+        self.is_admin_user = is_admin_user
+        self.name = name or email
+        self.picture = picture
+
+    def is_admin(self):
+        return self.is_admin_user
+
+# Lookup user by ID from SQLite
+def get_user_by_id(user_id):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, email, name, picture, status FROM users WHERE id = ?', (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"Error fetching user by id: {e}")
+        return None
+
+@login_manager.user_loader
+def load_user(user_id):
+    # Admin shortcut
+    if user_id in ADMIN_USERS:
+        return User(user_id, is_admin_user=True)
+    # Regular user
+    try:
+        int_id = int(user_id)
+    except (ValueError, TypeError):
+        return None
+    user_data = get_user_by_id(int_id)
+    if not user_data:
+        return None
+    return User(
+        user_data['id'],
+        email=user_data.get('email'),
+        is_admin_user=False,
+        name=user_data.get('name'),
+        picture=user_data.get('picture')
+    )
+
 # API Keys from environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
@@ -175,279 +229,145 @@ PRESENTATION_TYPES = {
             {'title': 'Вопросы', 'description': 'Q&A и дополнительные материалы'}
         ],
         'tips': 'Ясность, структура, повторение. Используйте визуализацию и примеры.'
+    },
+    'startup': {
+        'name_ru': 'Стартап-питч',
+        'name_en': 'Startup Pitch',
+        'icon': '🚀',
+        'color': '#9b59b6',
+        'structure': [
+            {'title': 'Проблема', 'description': 'Какую проблему решаете'},
+            {'title': 'Решение', 'description': 'Ваш продукт/сервис'},
+            {'title': 'Рынок', 'description': 'Размер и возможности'},
+            {'title': 'Бизнес-модель', 'description': 'Как зарабатываете'},
+            {'title': 'Traction', 'description': 'Первые результаты'},
+            {'title': 'Команда', 'description': 'Кто за этим стоит'},
+            {'title': 'Ask', 'description': 'Что нужно для роста'}
+        ],
+        'tips': 'Продукт, тракшн, команда. Покажите momentum и потенциал роста.'
     }
 }
 
-# Validate presentation type
-def validate_presentation_type(ptype):
-    """Validate if presentation type is supported"""
-    return ptype in PRESENTATION_TYPES
+# Supported languages
+SUPPORTED_LANGUAGES = {
+    'ru': 'Russian',
+    'en': 'English',
+    'es': 'Spanish',
+    'zh': 'Chinese',
+    'fr': 'French'
+}
 
-# Get presentation type info
-def get_presentation_type_info(ptype):
-    """Get presentation type configuration"""
-    return PRESENTATION_TYPES.get(ptype, PRESENTATION_TYPES['business'])
+# AI role prompts per presentation type and language
+def get_ai_role_prompt(presentation_type, language):
+    """Get AI system role prompt based on presentation type and language"""
+    prompts = {
+        'business': {
+            'ru': "Ты опытный бизнес-консультант. Создай профессиональную бизнес-презентацию на русском языке.",
+            'en': "You are an experienced business consultant. Create a professional business presentation in English.",
+            'es': "Eres un consultor de negocios experimentado. Crea una presentación empresarial profesional en español.",
+            'zh': "你是一位经验丰富的商业顾问。请用中文创建专业的商务演示文稿。",
+            'fr': "Vous êtes un consultant en affaires expérimenté. Créez une présentation professionnelle en français."
+        },
+        'sales': {
+            'ru': "Ты эксперт по продажам. Создай мощный sales pitch на русском языке.",
+            'en': "You are a sales expert. Create a strong sales pitch in English.",
+            'es': "Eres un experto en ventas. Crea un poderoso pitch de ventas en español.",
+            'zh': "你是销售专家。请用中文创建有力的销售演示文稿。",
+            'fr': "Vous êtes un expert en ventes. Créez un argumentaire de vente puissant en français."
+        },
+        'investor': {
+            'ru': "Ты опытный инвестор-стартапер. Создай инвесторскую презентацию на русском.",
+            'en': "You are a seasoned startup investor. Create an investor pitch deck in English.",
+            'es': "Eres un inversor experimentado. Crea una presentación para inversores en español.",
+            'zh': "你是一名资深投资人。请用中文创建投资者路演文稿。",
+            'fr': "Vous êtes un investisseur aguerri. Créez une présentation pour investisseurs en français."
+        },
+        'educational': {
+            'ru': "Ты профессиональный преподаватель. Создай учебную презентацию на русском.",
+            'en': "You are a professional educator. Create an educational presentation in English.",
+            'es': "Eres un educador profesional. Crea una presentación educativa en español.",
+            'zh': "你是专业教师。请用中文创建教育演示文稿。",
+            'fr': "Vous êtes un éducateur professionnel. Créez une présentation éducative en français."
+        },
+        'startup': {
+            'ru': "Ты фаундер стартапа. Создай питч для стартапа на русском.",
+            'en': "You are a startup founder. Create a startup pitch in English.",
+            'es': "Eres fundador de una startup. Crea un pitch de startup en español.",
+            'zh': "你是一名创业者。请用中文创建创业演示文稿。",
+            'fr': "Vous êtes fondateur d'une startup. Créez un pitch de startup en français."
+        }
+    }
+    # Default to business/en if not found
+    return prompts.get(presentation_type, prompts['business']).get(language, prompts['business']['en'])
 
-def limit_slide_content(content, max_length=300):
-    """Limit slide content to maximum character length"""
-    if len(content) <= max_length:
-        return content
-    # Truncate at the last sentence before max_length
-    truncated = content[:max_length]
-    last_period = truncated.rfind('.')
-    last_exclamation = truncated.rfind('!')
-    last_question = truncated.rfind('?')
-    
-    last_sentence_end = max(last_period, last_exclamation, last_question)
-    
-    if last_sentence_end > max_length * 0.7:  # At least 70% of content
-        return content[:last_sentence_end + 1]
+# System prompts per presentation type
+SYSTEM_PROMPTS = {
+    'sales': (
+        'Ты опытный продажник с 10+ летним стажем в B2B и B2C. Твоя задача — создать убедительную Sales Pitch презентацию, которая продаёт. Используй эти принципы:\n'
+        '- Начни с проблемы клиента (боль, которую он испытывает)\n'
+        '- Покажи уникальное решение (почему именно твой продукт)\n'
+        '- Подчеркни выгоды и преимущества перед конкурентами\n'
+        '- Добавь социальные доказательства (кейсы, отзывы, цифры)\n'
+        '- Заверши сильным призывом к действию (CTA: купить, попробовать, демо)\n'
+        'Используй активный, убеждающий язык. Часто используй слова: "выгода", "сэкономить", "результат", "рост".'
+    ),
+    'investor': (
+        'Ты опытный предприниматель и инвестор, знаешь, как привлекать денег. Создаёшь Investor Pitch для венчурных фондов. Используй эти принципы:\n'
+        '- Определи большую проблему на рынке (Problem)\n'
+        '- Покажи масштабируемое решение (Solution)\n'
+        '- Приведи размер рынка (TAM, SAM, SOM — покажи масштаб)\n'
+        '- Объясни бизнес-модель (как зарабатываем, unit-экономика)\n'
+        '- Укажи конкурентное преимущество\n'
+        '- Опиши команду (опыт, достижения)\n'
+        '- Приведи финансовые показатели и прогнозы (выручка, рост, прибыль)\n'
+        '- Скажи, сколько денег нужно и на что потратишь\n'
+        'Язык: ориентирован на цифры, ROI, масштабируемость, потенциал роста. Впечатляй данными.'
+    ),
+    'business': (
+        'Ты опытный бизнес-консультант. Создаёшь Business Presentation для внутренних встреч и партнёров. Используй эти принципы:\n'
+        '- Введение и контекст ситуации\n'
+        '- Описание ключевых вызовов/проблем\n'
+        '- Наш подход к решению\n'
+        '- Результаты и метрики (данные, графики)\n'
+        '- Следующие шаги и рекомендации\n'
+        'Язык: профессиональный, ориентирован на факты, данные, результаты. Не слишком продающий, но убеждающий.'
+    ),
+    'educational': (
+        'Ты опытный учитель и методист с опытом создания обучающих курсов. Создаёшь Educational презентацию для студентов или сотрудников. Используй эти принципы:\n'
+        '- Определи цели обучения (что они научатся)\n'
+        '- Объясни теорию пошагово (основные концепции, простым языком)\n'
+        '- Приведи практические примеры и аналогии\n'
+        '- Предложи упражнения для закрепления\n'
+        '- Резюмируй ключевые выводы\n'
+        'Язык: простой, доступный, с примерами и визуализациями. Часто: "например", "представьте", "для практики".'
+    )
+}
+
+# Structure generator per type
+def get_slide_structure_by_type(presentation_type: str, num_slides: int):
+    seq = []
+    t = presentation_type
+    n = max(3, min(10, num_slides))
+    if t == 'sales':
+        seq = ['Title/Hook'] + ['Customer Problem']*2 + ['Solution & Uniqueness']*2 + ['Benefits & Advantages']*2 + ['Social Proof']*2 + ['Pricing/Offer'] + ['Call-to-Action']*2
+    elif t == 'investor':
+        seq = ['Problem', 'Solution', 'Market Size', 'Business Model']*1 + ['Business Model'] + ['Competitors & Advantages', 'Team'] + ['Financials & Metrics']*2 + ['Use of Funds']*2 + ['The Ask']
+    elif t == 'business':
+        seq = ['Intro/Title'] + ['Context/Situation']*2 + ['Key Challenges']*2 + ['Our Approach']*2 + ['Results & Metrics']*2 + ['Next Steps']
+    elif t == 'startup':
+        seq = ['Title/Hook', 'Problem', 'Solution', 'Market Opportunity', 'Business Model', 'Traction', 'Team', 'Roadmap', 'Financials', 'The Ask']
+    else:  # educational
+        seq = ['Learning Objectives'] + ['Theory']*3 + ['Examples']*4 + ['Exercises']*4 + ['Key Takeaways']*3
+    # Trim or expand
+    if len(seq) >= n:
+        return seq[:n]
     else:
-        # Just truncate and add ellipsis
-        return truncated.rstrip() + '...'
+        # Pad last item
+        return seq + [seq[-1]]*(n-len(seq))
 
-# User management functions
-def get_all_users():
-    """Get all users from the database"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row  # This allows us to access columns by name
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, email, status, registration_date FROM users ORDER BY registration_date DESC')
-        users = cursor.fetchall()
-        conn.close()
-        return [dict(user) for user in users]
-    except Exception as e:
-        print(f"Error fetching users: {e}")
-        return []
-
-def get_user_by_id(user_id):
-    """Get a specific user by ID"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, email, status, registration_date FROM users WHERE id = ?', (user_id,))
-        user = cursor.fetchone()
-        conn.close()
-        return dict(user) if user else None
-    except Exception as e:
-        print(f"Error fetching user: {e}")
-        return None
-
-def delete_user(user_id):
-    """Delete a user from the database"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # First delete user's presentations
-        cursor.execute('DELETE FROM presentations WHERE user_id = ?', (user_id,))
-        
-        # Then delete the user
-        cursor.execute('DELETE FROM users WHERE id = ?', (user_id,))
-        
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"Error deleting user: {e}")
-        return False
-
-def update_user_status(user_id, status):
-    """Update a user's status"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('UPDATE users SET status = ? WHERE id = ?', (status, user_id))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"Error updating user status: {e}")
-        return False
-
-def create_user(email, password):
-    """Create a new user with hashed password"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Check if user already exists
-        cursor.execute('SELECT id FROM users WHERE email = ?', (email,))
-        if cursor.fetchone():
-            conn.close()
-            return None, 'Email already registered'
-        
-        # Create user with hashed password
-        password_hash = generate_password_hash(password)
-        cursor.execute(
-            'INSERT INTO users (email, password_hash, status) VALUES (?, ?, ?)',
-            (email, password_hash, 'active')
-        )
-        conn.commit()
-        user_id = cursor.lastrowid
-        conn.close()
-        
-        return user_id, None
-    except Exception as e:
-        print(f"Error creating user: {e}")
-        return None, 'Error creating user account'
-
-def authenticate_user(email, password):
-    """Authenticate user by email and password"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
-        user = cursor.fetchone()
-        conn.close()
-        
-        if not user:
-            return None, 'Invalid email or password'
-        
-        if user['status'] == 'blocked':
-            return None, 'Your account has been blocked. Please contact support.'
-        
-        # Check password
-        if not check_password_hash(user['password_hash'], password):
-            return None, 'Invalid email or password'
-        
-        return dict(user), None
-    except Exception as e:
-        print(f"Error authenticating user: {e}")
-        return None, 'Authentication error'
-
-def validate_email(email):
-    """Validate email format"""
-    if not email or len(email) < 3:
-        return False, 'Email is required'
-    
-    # Simple email regex pattern
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    if not re.match(email_pattern, email):
-        return False, 'Invalid email format'
-    
-    if len(email) > 100:
-        return False, 'Email is too long (max 100 characters)'
-    
-    return True, None
-
-def validate_password(password):
-    """Validate password strength"""
-    if not password:
-        return False, 'Password is required'
-    
-    if len(password) < 6:
-        return False, 'Password must be at least 6 characters long'
-    
-    if len(password) > 100:
-        return False, 'Password is too long (max 100 characters)'
-    
-    # Check for at least one letter and one number
-    if not re.search(r'[a-zA-Z]', password):
-        return False, 'Password must contain at least one letter'
-    
-    if not re.search(r'[0-9]', password):
-        return False, 'Password must contain at least one number'
-    
-    return True, None
-
-def get_or_create_google_user(google_id, email, name, picture):
-    """Get existing Google user or create new one"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # Try to find user by Google ID
-        cursor.execute('SELECT * FROM users WHERE google_id = ?', (google_id,))
-        user = cursor.fetchone()
-        
-        if user:
-            # Update user info if changed
-            cursor.execute(
-                'UPDATE users SET name = ?, picture = ?, email = ? WHERE google_id = ?',
-                (name, picture, email, google_id)
-            )
-            conn.commit()
-            conn.close()
-            return dict(user), None
-        
-        # Try to find user by email (link existing account)
-        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
-        user = cursor.fetchone()
-        
-        if user:
-            # Link Google account to existing email account
-            cursor.execute(
-                'UPDATE users SET google_id = ?, name = ?, picture = ? WHERE email = ?',
-                (google_id, name, picture, email)
-            )
-            conn.commit()
-            user_dict = dict(user)
-            user_dict['google_id'] = google_id
-            conn.close()
-            return user_dict, None
-        
-        # Create new user
-        cursor.execute(
-            'INSERT INTO users (email, google_id, name, picture, status) VALUES (?, ?, ?, ?, ?)',
-            (email, google_id, name, picture, 'active')
-        )
-        conn.commit()
-        user_id = cursor.lastrowid
-        
-        cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
-        user = cursor.fetchone()
-        conn.close()
-        
-        return dict(user), None
-    except Exception as e:
-        print(f"Error with Google user: {e}")
-        return None, 'Error processing Google account'
-
-# Simple admin user storage (in production, use a proper database)
-# For now, we'll use a static dictionary with a hashed password
-ADMIN_USERS = {
-    'admin': {
-        'password_hash': generate_password_hash(os.getenv('ADMIN_PASSWORD', 'admin123')),
-        'id': 'admin'
-    }
-}
-
-# User class for Flask-Login
-class User(UserMixin):
-    def __init__(self, user_id, email=None, is_admin_user=False, name=None, picture=None):
-        self.id = user_id
-        self.email = email
-        self.is_admin_user = is_admin_user
-        self.name = name or email
-        self.picture = picture
-    
-    def is_admin(self):
-        return self.is_admin_user
-
-@login_manager.user_loader
-def load_user(user_id):
-    # Check if admin
-    if user_id in ADMIN_USERS:
-        return User(user_id, is_admin_user=True)
-    
-    # Check if regular user
-    user_data = get_user_by_id(user_id)
-    if user_data:
-        return User(
-            user_data['id'], 
-            email=user_data['email'], 
-            is_admin_user=False,
-            name=user_data.get('name'),
-            picture=user_data.get('picture')
-        )
-    
-    return None
+# Get presentation type info safely
+def get_presentation_type_info(presentation_type: str):
+    return PRESENTATION_TYPES.get(presentation_type, PRESENTATION_TYPES['business'])
 
 # Check if current user is admin
 def is_admin():
@@ -522,27 +442,19 @@ def generate_slide_content_in_language(topic, num_slides, language='en', present
         structure_guide = type_info.get('structure', [])
         tips = type_info.get('tips', '')
         
-        # Build structure guidance string
-        structure_text = "\n".join([f"- Slide {i+1}: {item['title']} — {item['description']}" 
-                                     for i, item in enumerate(structure_guide[:num_slides])])
+        # Build structure guidance string from type-specific sequence
+        guided_sequence = get_slide_structure_by_type(presentation_type, num_slides)
+        structure_text = "\n".join([f"- Slide {i+1}: {title}" for i, title in enumerate(guided_sequence)])
         
         headers = {
             'Authorization': f'Bearer {OPENAI_API_KEY}',
             'Content-Type': 'application/json'
         }
         
-        # Map language codes to full names for the prompt
-        language_names = {
-            'en': 'English',
-            'es': 'Spanish',
-            'ru': 'Russian',
-            'zh': 'Chinese',
-            'fr': 'French'
-        }
-        
-        # Get the language name for the prompt
-        language_name = language_names.get(language, 'English')
-        
+        # Get AI role prompt based on type and language
+        language_name = SUPPORTED_LANGUAGES.get(language, 'English')
+        system_prompt = get_ai_role_prompt(presentation_type, language)
+
         # Create prompt based on language and presentation type
         if language == 'ru':
             type_name_ru = type_info.get('name_ru', 'Презентация')
@@ -749,67 +661,25 @@ CRITIQUE :
 - Le titre et le contenu de chaque diapositive doivent être LIÉS LOGIQUEMENT
 - Chaque search_keyword doit être DIFFÉRENT et spécifique"""
         else:  # Default to English
-            type_name_en = type_info.get('name_en', 'Presentation')
             prompt = f"""Create a structured presentation on the topic: "{topic}"
 Number of slides: {num_slides}
-Presentation Type: {type_name_en}
-
-RECOMMENDED STRUCTURE FOR THIS TYPE:
-{structure_text}
-
-STYLE GUIDANCE: {tips}
 
 IMPORTANT: The presentation must consist of THESIS STATEMENTS, not descriptions!
-Use the recommended structure as a guide, but adapt it to the topic "{topic}".
+Use the structure below as a guide, but adapt it to the topic "{topic}".
 
 THESIS — a key statement that reveals part of the topic.
-Do NOT just describe, but formulate specific ideas and arguments.
+Do NOT just describe; formulate specific ideas and arguments.
 
-THESIS STRUCTURE:
-- Slide 1: Main idea of the topic (core statement)
-- Slides 2-{num_slides-1}: Key aspects, benefits, applications
-- Slide {num_slides}: Conclusion, future, takeaway
+FORMAT REQUIREMENTS:
+- Keep paragraphs concise (2-3 sentences)
+- Return ONLY valid JSON with fields: title, search_keyword (English), content
+"""
 
-Each thesis must:
-✓ Be a specific statement directly related to "{topic}"
-✓ Contain 2-3 precise sentences with CONCRETE details and examples
-✓ Develop the main topic
-✓ Form a logical chain with other theses
-✓ AVOID template phrases like "key technology", "digital age", "modern society"
-✓ Use SPECIFIC terminology and facts relevant only to "{topic}"
-
-For each slide, return JSON with fields:
-- "title": Brief title (2-3 words) specific to the topic
-- "search_keyword": Keywords for image search in English (3-4 words)
-- "content": THESIS — specific statement (2-3 sentences with details)
-
-EXAMPLE of correct theses for "Dogs":
-{{
-  "slides": [
-    {{"title": "Dog Evolution", "search_keyword": "dog evolution wolf domestication", "content": "Dogs descended from wolves approximately 15,000 years ago through domestication. Genetic research shows that the first dogs appeared in East Asia and spread worldwide with humans. Modern breeds are the result of selective breeding over the past 200 years."}},
-    {{"title": "Breeds and Functions", "search_keyword": "dog breeds working dogs types", "content": "Over 400 recognized dog breeds exist, each bred for specific tasks. Herding breeds (Border Collies, Shepherds) manage livestock, hunting breeds (Retrievers, Spaniels) assist in hunting, while guard breeds (Dobermans, Rottweilers) protect property. Toy breeds (Chihuahuas, Terriers) are bred exclusively for companionship."}},
-    {{"title": "Canine Intelligence", "search_keyword": "dog intelligence training cognition", "content": "Dogs can memorize up to 165 words and gestures, comparable to the cognitive abilities of a two-year-old child. Border Collies are considered the smartest breed, understanding new commands after just 5 repetitions. Research shows dogs distinguish human emotions through facial expressions and tone of voice."}}
-  ]
-}}
-
-WRONG (template phrases):
-"Dogs are becoming a key factor in modern society. The adoption of these technologies unlocks new potential."
-
-CORRECT (concrete facts):
-"Dogs possess a sense of smell 10,000 times sharper than humans due to 300 million olfactory receptors. This enables them to detect drugs, explosives, and even diagnose cancer in early stages."
-
-Return ONLY valid JSON without additional text.
-
-CRITICAL: 
-- Each thesis must contain CONCRETE facts, numbers, examples related to "{topic}"
-- Do NOT use generic phrases about "technology", "innovation", "future" without specifics
-- Title and content of each slide must be LOGICALLY connected
-- Each search_keyword must be DIFFERENT and specific"""
 
         data = {
             'model': 'gpt-3.5-turbo',
             'messages': [
-                {'role': 'system', 'content': f'You are a helpful presentation creator. Always respond with valid JSON only. Generate content in {language_name} language.'},
+                {'role': 'system', 'content': f"{system_prompt}\n\nAlways respond with valid JSON only. Generate content in {language_name}."},
                 {'role': 'user', 'content': prompt}
             ],
             'temperature': 0.7,
@@ -1350,6 +1220,7 @@ def create_presentation(topic, slides_data, theme='light'):
         title_frame.text = slide_data['title']
         title_para = title_frame.paragraphs[0]
         title_para.alignment = PP_ALIGN.CENTER
+        title_para.font.name = 'Roboto'
         
         # Calculate optimal font size to fit title in one line
         optimal_font_size = calculate_title_font_size(
@@ -1407,8 +1278,10 @@ def create_presentation(topic, slides_data, theme='light'):
         else:
             print(f"  ⚠ Continuing without image (no unique image found)")
         
-        # Add content text (description)
-        content_text = limit_slide_content(slide_data['content'], max_length=300)
+        # Add content text (description) with length limit
+        content_text = slide_data['content']
+        if len(content_text) > 500:
+            content_text = content_text[:500] + "..."
         content_box = slide.shapes.add_textbox(
             Inches(0.5), Inches(1.4),
             Inches(4.8), Inches(3.6)
@@ -1428,6 +1301,7 @@ def create_presentation(topic, slides_data, theme='light'):
             base_font_size = 16
         
         for paragraph in content_frame.paragraphs:
+            paragraph.font.name = 'Roboto'
             paragraph.font.size = Pt(base_font_size if not (is_title_slide or is_last_slide) else 20)
             if is_title_slide or is_last_slide:
                 paragraph.font.color.rgb = theme_config['content_color_first_last']
@@ -1481,12 +1355,13 @@ def create_presentation_api():
         if not topic:
             return jsonify({'error': 'Topic is required'}), 400
         
-        if not isinstance(num_slides, int) or num_slides < 3 or num_slides > 10:
-            return jsonify({'error': 'Number of slides must be between 3 and 10'}), 400
-        
-        # Validate presentation type
-        if not validate_presentation_type(presentation_type):
-            return jsonify({'error': f'Invalid presentation type. Must be one of: {list(PRESENTATION_TYPES.keys())}'}), 400
+        # Normalize slides count to default 10 if out of range
+        try:
+            num_slides = int(num_slides)
+        except (ValueError, TypeError):
+            num_slides = 10
+        if num_slides < 3 or num_slides > 10:
+            num_slides = 10
         
         # Check API keys
         if not OPENAI_API_KEY:
@@ -1874,7 +1749,7 @@ def user_dashboard():
             query += ' AND topic LIKE ?'
             params.append(f'%{search_query}%')
         
-        if filter_type and validate_presentation_type(filter_type):
+        if filter_type and filter_type in PRESENTATION_TYPES:
             query += ' AND presentation_type = ?'
             params.append(filter_type)
         

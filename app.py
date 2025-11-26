@@ -359,6 +359,7 @@ def delete_user(user_id):
 # API Keys from environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
+UNSPLASH_ACCESS_KEY = os.getenv('UNSPLASH_ACCESS_KEY')  # Added Unsplash support
 LIBRETRANSLATE_ENABLED = os.getenv('LIBRETRANSLATE_ENABLED', 'false').lower() in ('1', 'true', 'yes')
 LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL', 'http://localhost:5001')
 LIBRETRANSLATE_TIMEOUT = int(os.getenv('LIBRETRANSLATE_TIMEOUT', '10'))
@@ -1250,52 +1251,205 @@ def save_image_to_cache(image_data, keywords):
         return None
 
 
+# ============================================================================
+# Image Search API - Multi-source with fallback and rate limiting
+# ============================================================================
+
+# Rate limiting state
+API_CALL_TIMES = {'pexels': [], 'unsplash': []}
+MAX_CALLS_PER_MINUTE = {'pexels': 50, 'unsplash': 50}  # API limits
+
+def can_make_api_call(service):
+    """
+    Check if we can make API call based on rate limits
+    Returns True if allowed, False if rate limit exceeded
+    """
+    import time
+    current_time = time.time()
+    
+    # Clean old calls (older than 60 seconds)
+    API_CALL_TIMES[service] = [
+        t for t in API_CALL_TIMES[service] 
+        if current_time - t < 60
+    ]
+    
+    # Check limit
+    if len(API_CALL_TIMES[service]) >= MAX_CALLS_PER_MINUTE[service]:
+        print(f"  ⚠ Rate limit reached for {service}")
+        return False
+    
+    # Record this call
+    API_CALL_TIMES[service].append(current_time)
+    return True
+
+
+def search_pexels_image(query, retries=2):
+    """
+    Search for image on Pexels with retry logic
+    Returns: (image_url, photographer_name) or (None, None)
+    """
+    if not PEXELS_API_KEY:
+        print("  ⚠ Pexels API key not configured")
+        return None, None
+    
+    if not can_make_api_call('pexels'):
+        return None, None
+    
+    for attempt in range(retries):
+        try:
+            query_clean = query.strip().lower()
+            
+            headers = {
+                'Authorization': PEXELS_API_KEY
+            }
+            
+            params = {
+                'query': query_clean,
+                'per_page': 1,
+                'orientation': 'landscape'
+            }
+            
+            if attempt == 0:
+                print(f"  → Pexels search: '{query_clean}'")
+            
+            response = requests.get(
+                'https://api.pexels.com/v1/search',
+                headers=headers,
+                params=params,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('photos') and len(data['photos']) > 0:
+                    photo = data['photos'][0]
+                    image_url = photo['src']['large']
+                    photographer = photo['photographer']
+                    print(f"  ✓ Pexels: {photographer}")
+                    return image_url, f"Photo by {photographer} on Pexels"
+                else:
+                    print(f"  ✗ No Pexels results for '{query_clean}'")
+                    return None, None
+            
+            elif response.status_code == 429:  # Rate limit
+                print(f"  ⚠ Pexels rate limit hit (attempt {attempt + 1}/{retries})")
+                if attempt < retries - 1:
+                    import time
+                    time.sleep(1)  # Wait before retry
+                    continue
+                return None, None
+            
+            else:
+                print(f"  ✗ Pexels API error: {response.status_code}")
+                return None, None
+        
+        except requests.exceptions.Timeout:
+            print(f"  ⚠ Pexels timeout (attempt {attempt + 1}/{retries})")
+            if attempt < retries - 1:
+                continue
+            return None, None
+        
+        except Exception as e:
+            print(f"  ✗ Pexels error: {e}")
+            return None, None
+    
+    return None, None
+
+
+def search_unsplash_image(query, retries=2):
+    """
+    Search for image on Unsplash with retry logic
+    Returns: (image_url, photographer_name) or (None, None)
+    """
+    if not UNSPLASH_ACCESS_KEY:
+        return None, None  # Silent fail if not configured
+    
+    if not can_make_api_call('unsplash'):
+        return None, None
+    
+    for attempt in range(retries):
+        try:
+            query_clean = query.strip().lower()
+            
+            headers = {
+                'Authorization': f'Client-ID {UNSPLASH_ACCESS_KEY}'
+            }
+            
+            params = {
+                'query': query_clean,
+                'per_page': 1,
+                'orientation': 'landscape'
+            }
+            
+            if attempt == 0:
+                print(f"  → Unsplash search: '{query_clean}'")
+            
+            response = requests.get(
+                'https://api.unsplash.com/search/photos',
+                headers=headers,
+                params=params,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get('results') and len(data['results']) > 0:
+                    photo = data['results'][0]
+                    image_url = photo['urls']['regular']
+                    photographer = photo['user']['name']
+                    photographer_link = photo['user']['links']['html']
+                    print(f"  ✓ Unsplash: {photographer}")
+                    return image_url, f"Photo by {photographer} on Unsplash ({photographer_link})"
+                else:
+                    print(f"  ✗ No Unsplash results for '{query_clean}'")
+                    return None, None
+            
+            elif response.status_code == 429:  # Rate limit
+                print(f"  ⚠ Unsplash rate limit hit (attempt {attempt + 1}/{retries})")
+                if attempt < retries - 1:
+                    import time
+                    time.sleep(1)
+                    continue
+                return None, None
+            
+            else:
+                print(f"  ✗ Unsplash API error: {response.status_code}")
+                return None, None
+        
+        except requests.exceptions.Timeout:
+            print(f"  ⚠ Unsplash timeout (attempt {attempt + 1}/{retries})")
+            if attempt < retries - 1:
+                continue
+            return None, None
+        
+        except Exception as e:
+            print(f"  ✗ Unsplash error: {e}")
+            return None, None
+    
+    return None, None
+
+
 def search_image(query):
     """
-    Search for an image using Pexels API
+    Search for image using multiple sources (Pexels + Unsplash)
+    Returns image URL or None
     """
-    try:
-        # Clean and optimize search query
-        query = query.strip().lower()
-        
-        headers = {
-            'Authorization': PEXELS_API_KEY
-        }
-        
-        params = {
-            'query': query,
-            'per_page': 1,
-            'orientation': 'landscape'
-        }
-        
-        print(f"  → Pexels search query: '{query}'")
-        
-        response = requests.get(
-            'https://api.pexels.com/v1/search',
-            headers=headers,
-            params=params,
-            timeout=10
-        )
-        
-        if response.status_code != 200:
-            print(f"  ✗ Pexels API error: {response.status_code}")
-            return None
-        
-        data = response.json()
-        
-        if data.get('photos') and len(data['photos']) > 0:
-            # Get the large image URL
-            image_url = data['photos'][0]['src']['large']
-            print(f"  ✓ Image found: {data['photos'][0]['photographer']}")
-            return image_url
-        else:
-            print(f"  ✗ No images found for query: '{query}'")
-        
-        return None
-        
-    except Exception as e:
-        print(f"  ✗ Error searching image: {e}")
-        return None
+    # Try Pexels first (primary source)
+    image_url, attribution = search_pexels_image(query)
+    
+    if image_url:
+        # Store attribution for later use (could be saved to metadata)
+        return image_url
+    
+    # Fallback to Unsplash if Pexels fails
+    image_url, attribution = search_unsplash_image(query)
+    
+    if image_url:
+        return image_url
+    
+    return None
 
 
 def search_image_with_fallback(search_keyword, slide_title, main_topic, used_images):

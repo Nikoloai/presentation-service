@@ -41,3 +41,5 @@ dist/
 build/
 
 serviceAccountKey.json
+
+stripe-sample/

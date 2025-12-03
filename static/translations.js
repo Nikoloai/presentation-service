@@ -239,33 +239,28 @@ const languageNames = {
 const presentationTypeNames = {
     en: {
         business: "💼 Business Presentation",
-        sales: "💰 Sales Pitch",
-        investor: "📈 Investor Pitch",
-        educational: "🎓 Educational"
+        scientific: "🔬 Scientific Presentation",
+        general: "📊 General Presentation"
     },
     es: {
         business: "💼 Presentación Empresarial",
-        sales: "💰 Presentación de Ventas",
-        investor: "📈 Presentación para Inversores",
-        educational: "🎓 Educativa"
+        scientific: "🔬 Presentación Científica",
+        general: "📊 Presentación General"
     },
     ru: {
-        business: "💼 Бизнес-презентация",
-        sales: "💰 Продажи",
-        investor: "📈 Инвестиционный питч",
-        educational: "🎓 Образовательная"
+        business: "💼 Деловая презентация",
+        scientific: "🔬 Научная презентация",
+        general: "📊 Общая презентация"
     },
     zh: {
         business: "💼 商务演示",
-        sales: "💰 销售演示",
-        investor: "📈 投资者演示",
-        educational: "🎓 教育演示"
+        scientific: "🔬 科学演示",
+        general: "📊 通用演示"
     },
     fr: {
         business: "💼 Présentation Professionnelle",
-        sales: "💰 Présentation Commerciale",
-        investor: "📈 Présentation pour Investisseurs",
-        educational: "🎓 Éducative"
+        scientific: "🔬 Présentation Scientifique",
+        general: "📊 Présentation Générale"
     }
 };
 

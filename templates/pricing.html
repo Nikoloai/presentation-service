@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pricing - AI SlideRush</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 50px;
+        }
+        .header h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        .header p {
+            font-size: 20px;
+            opacity: 0.9;
+        }
+        .pricing-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        .pricing-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            position: relative;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .pricing-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        .pricing-card.popular {
+            border: 3px solid #667eea;
+        }
+        .popular-badge {
+            position: absolute;
+            top: -15px;
+            right: 20px;
+            background: #667eea;
+            color: white;
+            padding: 5px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .plan-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .plan-price {
+            font-size: 48px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        .plan-price span {
+            font-size: 18px;
+            color: #666;
+        }
+        .plan-description {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        .features-list {
+            list-style: none;
+            margin-bottom: 30px;
+        }
+        .features-list li {
+            padding: 12px 0;
+            color: #555;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #eee;
+        }
+        .features-list li:before {
+            content: '✓';
+            color: #667eea;
+            font-weight: bold;
+            margin-right: 10px;
+            font-size: 20px;
+        }
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: scale(1.05);
+        }
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #666;
+        }
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            color: white;
+            font-size: 18px;
+            margin: 20px 0;
+        }
+        .error-message {
+            background: #ff4444;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .back-link {
+            text-align: center;
+            margin-top: 30px;
+        }
+        .back-link a {
+            color: white;
+            text-decoration: none;
+            font-size: 16px;
+            opacity: 0.9;
+        }
+        .back-link a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 AI SlideRush Pricing</h1>
+            <p>Choose the perfect plan for your presentation needs</p>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="loading" id="loading">Processing payment... ⏳</div>
+
+        <div class="pricing-cards">
+            <!-- Free Plan -->
+            <div class="pricing-card">
+                <div class="plan-name">Free</div>
+                <div class="plan-price">$0<span>/month</span></div>
+                <div class="plan-description">Try out AI SlideRush</div>
+                <ul class="features-list">
+                    <li>3 presentations per month</li>
+                    <li>Basic templates</li>
+                    <li>Standard themes</li>
+                    <li>Email support</li>
+                </ul>
+                <button class="btn btn-secondary" disabled>Current Plan</button>
+            </div>
+
+            <!-- One-Time Purchase -->
+            <div class="pricing-card">
+                <div class="plan-name">One-Time</div>
+                <div class="plan-price">$9.99<span>/once</span></div>
+                <div class="plan-description">Single purchase access</div>
+                <ul class="features-list">
+                    <li>20 presentations</li>
+                    <li>All templates</li>
+                    <li>All themes</li>
+                    <li>Priority email support</li>
+                </ul>
+                <button class="btn btn-primary" onclick="createCheckout('one_time')">
+                    Purchase Now
+                </button>
+            </div>
+
+            <!-- Pro Plan -->
+            <div class="pricing-card popular">
+                <div class="popular-badge">⭐ Most Popular</div>
+                <div class="plan-name">Pro</div>
+                <div class="plan-price">$19.99<span>/once</span></div>
+                <div class="plan-description">Best value for professionals</div>
+                <ul class="features-list">
+                    <li>100 presentations</li>
+                    <li>Premium templates</li>
+                    <li>Advanced customization</li>
+                    <li>Priority support</li>
+                    <li>Export to PDF</li>
+                </ul>
+                <button class="btn btn-primary" onclick="createCheckout('pro')">
+                    Get Pro
+                </button>
+            </div>
+
+            <!-- Premium Subscription -->
+            <div class="pricing-card">
+                <div class="plan-name">Premium</div>
+                <div class="plan-price">$49.99<span>/month</span></div>
+                <div class="plan-description">Unlimited presentations</div>
+                <ul class="features-list">
+                    <li>Unlimited presentations</li>
+                    <li>All Pro features</li>
+                    <li>API access</li>
+                    <li>White-label option</li>
+                    <li>24/7 priority support</li>
+                    <li>Custom branding</li>
+                </ul>
+                <button class="btn btn-primary" onclick="createCheckout('premium')">
+                    Subscribe Now
+                </button>
+            </div>
+        </div>
+
+        <div class="back-link">
+            <a href="/dashboard">← Back to Dashboard</a>
+        </div>
+    </div>
+
+    <script>
+        async function createCheckout(planType) {
+            const loading = document.getElementById('loading');
+            const errorMessage = document.getElementById('errorMessage');
+            
+            // Hide error, show loading
+            errorMessage.style.display = 'none';
+            loading.style.display = 'block';
+            
+            try {
+                const response = await fetch('/api/create-checkout-session', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        plan_type: planType
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || data.message || 'Payment failed');
+                }
+                
+                if (data.url) {
+                    // Redirect to Stripe Checkout
+                    console.log('Redirecting to Stripe Checkout:', data.url);
+                    window.location.href = data.url;
+                } else {
+                    throw new Error('No checkout URL received');
+                }
+                
+            } catch (error) {
+                loading.style.display = 'none';
+                errorMessage.textContent = '❌ Error: ' + error.message;
+                errorMessage.style.display = 'block';
+                console.error('Checkout error:', error);
+            }
+        }
+        
+        // Check for payment status in URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const paymentStatus = urlParams.get('payment');
+        
+        if (paymentStatus === 'success') {
+            alert('✅ Payment successful! Your account has been upgraded.');
+            // Remove payment parameter from URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+        } else if (paymentStatus === 'cancelled') {
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = '⚠️ Payment was cancelled. You can try again anytime.';
+            errorMessage.style.display = 'block';
+            // Remove payment parameter from URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+    </script>
+</body>
+</html>

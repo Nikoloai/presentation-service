@@ -19,6 +19,7 @@ from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
 from dotenv import load_dotenv
 import uuid
 import io
+import stripe  # Stripe payment integration
 TRANSLATION_CACHE = {}
 CYRILLIC_RE = re.compile('[а-яА-Я]')
 
@@ -28,6 +29,27 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
+
+# ============================================================================
+# Stripe Configuration
+# ============================================================================
+# Initialize Stripe with secret key from environment
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+    print("✅ Stripe initialized successfully")
+    print(f"   → API Key: {STRIPE_SECRET_KEY[:7]}...{STRIPE_SECRET_KEY[-4:]}")
+else:
+    print("⚠️ Stripe not configured: STRIPE_SECRET_KEY not found")
+    print("   → Payment features will NOT work")
+
+if STRIPE_WEBHOOK_SECRET:
+    print("✅ Stripe webhook secret configured")
+else:
+    print("⚠️ STRIPE_WEBHOOK_SECRET not configured")
+    print("   → Webhook signature verification will be skipped (INSECURE for production)")
 
 # ============================================================================
 # Firebase Admin SDK Initialization
@@ -192,12 +214,15 @@ def get_or_create_firebase_user(firebase_uid, email, name='', picture=''):
         
         # Create new user
         cursor.execute(
-            '''INSERT INTO users (email, firebase_uid, name, picture, status)
-               VALUES (?, ?, ?, ?, 'active')''',
+            '''INSERT INTO users (email, firebase_uid, name, picture, status, free_credits)
+               VALUES (?, ?, ?, ?, 'active', 3)''',
             (email, firebase_uid, name, picture)
         )
         conn.commit()
         user_id = cursor.lastrowid
+        
+        print(f"✅ New Firebase user created: {email} (ID: {user_id})")
+        print(f"   → Free credits: 3 presentations")
         
         cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
         user = cursor.fetchone()
@@ -260,13 +285,16 @@ def create_user(email, password):
         # Create user
         password_hash = generate_password_hash(password)
         cursor.execute(
-            '''INSERT INTO users (email, password_hash, status)
-               VALUES (?, ?, 'active')''',
+            '''INSERT INTO users (email, password_hash, status, free_credits)
+               VALUES (?, ?, 'active', 3)''',
             (email, password_hash)
         )
         conn.commit()
         user_id = cursor.lastrowid
         conn.close()
+        
+        print(f"✅ New user created: {email} (ID: {user_id})")
+        print(f"   → Free credits: 3 presentations")
         
         return user_id, None
         
@@ -364,6 +392,15 @@ LIBRETRANSLATE_ENABLED = os.getenv('LIBRETRANSLATE_ENABLED', 'false').lower() in
 LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL', 'http://localhost:5001')
 LIBRETRANSLATE_TIMEOUT = int(os.getenv('LIBRETRANSLATE_TIMEOUT', '10'))
 
+# ============================================================================
+# IMAGE PROVIDER CONFIGURATION
+# ============================================================================
+# Configure image provider strategy: 'pexels', 'unsplash', or 'mixed'
+# - 'pexels': Only use Pexels API
+# - 'unsplash': Only use Unsplash API  
+# - 'mixed': Try Pexels first, fallback to Unsplash (recommended)
+IMAGE_PROVIDER_MODE = os.getenv('IMAGE_PROVIDER_MODE', 'mixed').lower()
+
 # Configuration
 OUTPUT_DIR = 'output'
 IMAGE_CACHE_DIR = 'image_cache'
@@ -413,26 +450,51 @@ def init_db():
             )
         ''')
         
-        # Migration: Add firebase_uid column if it doesn't exist
-        # Note: SQLite ALTER TABLE does not support adding UNIQUE constraint directly
-        # We add the column first, then create a unique index separately
+        # Migration: Add missing columns to users table
+        # Safe pattern: check column existence before adding to avoid errors
         cursor.execute("PRAGMA table_info(users)")
-        columns = [column[1] for column in cursor.fetchall()]
+        existing_columns = [column[1] for column in cursor.fetchall()]
         
-        if 'firebase_uid' not in columns:
-            # Step 1: Add firebase_uid column without UNIQUE constraint
-            cursor.execute('ALTER TABLE users ADD COLUMN firebase_uid TEXT')
-            print("✅ Migration: Added firebase_uid column to users table")
+        # Add firebase_uid column if missing
+        if 'firebase_uid' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN firebase_uid TEXT')
+                print("✅ Migration: Added firebase_uid column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: firebase_uid column may already exist - {e}")
         
-        # Check if unique index exists (separate from column check)
+        # Add name column if missing
+        if 'name' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN name TEXT')
+                print("✅ Migration: Added name column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: name column may already exist - {e}")
+        
+        # Add picture column if missing
+        if 'picture' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN picture TEXT')
+                print("✅ Migration: Added picture column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: picture column may already exist - {e}")
+        
+        # Add google_id column if missing (for backward compatibility)
+        if 'google_id' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN google_id TEXT')
+                print("✅ Migration: Added google_id column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: google_id column may already exist - {e}")
+        
+        # Create unique index on firebase_uid if it doesn't exist
         cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_firebase_uid'")
-        index_exists = cursor.fetchone() is not None
-        
-        if not index_exists:
-            # Step 2: Create unique index on firebase_uid column
-            # This ensures uniqueness while allowing NULL values
-            cursor.execute('CREATE UNIQUE INDEX idx_firebase_uid ON users(firebase_uid)')
-            print("✅ Migration: Created unique index on firebase_uid column")
+        if not cursor.fetchone():
+            try:
+                cursor.execute('CREATE UNIQUE INDEX idx_firebase_uid ON users(firebase_uid)')
+                print("✅ Migration: Created unique index on firebase_uid column")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: idx_firebase_uid index may already exist - {e}")
         
         # Migration: Add presentation_type column if it doesn't exist
         cursor.execute("PRAGMA table_info(presentations)")
@@ -440,6 +502,43 @@ def init_db():
         if 'presentation_type' not in columns:
             cursor.execute('ALTER TABLE presentations ADD COLUMN presentation_type TEXT DEFAULT "business"')
             print("✅ Migration: Added presentation_type column to presentations table")
+        
+        # Migration: Add Stripe-related columns to users table
+        cursor.execute("PRAGMA table_info(users)")
+        existing_columns = [column[1] for column in cursor.fetchall()]
+        
+        # Add stripe_customer_id column if missing
+        if 'stripe_customer_id' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN stripe_customer_id TEXT')
+                print("✅ Migration: Added stripe_customer_id column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: stripe_customer_id column may already exist - {e}")
+        
+        # Add subscription_plan column if missing
+        if 'subscription_plan' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN subscription_plan TEXT DEFAULT "free"')
+                print("✅ Migration: Added subscription_plan column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: subscription_plan column may already exist - {e}")
+        
+        # Add subscription_status column if missing
+        if 'subscription_status' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN subscription_status TEXT DEFAULT "inactive"')
+                print("✅ Migration: Added subscription_status column to users table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: subscription_status column may already exist - {e}")
+        
+        # Migration: Add free_credits column to users table (3 free presentations for new users)
+        if 'free_credits' not in existing_columns:
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN free_credits INTEGER NOT NULL DEFAULT 3')
+                print("✅ Migration: Added free_credits column to users table")
+                print("   → New users will get 3 free presentations")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: free_credits column may already exist - {e}")
         
         conn.commit()
         
@@ -461,83 +560,67 @@ def init_db():
 init_db()
 
 # Presentation types configuration
+# Presentation types configuration - REFACTORED TO 3 TYPES
 PRESENTATION_TYPES = {
     'business': {
-        'name_ru': 'Бизнес-презентация',
+        'name_ru': 'Деловая презентация',
         'name_en': 'Business Presentation',
         'icon': '💼',
         'color': '#667eea',
+        'temperature': 0.6,  # Confident, professional tone
         'structure': [
-            {'title': 'Введение', 'description': 'Представьте компанию и тему'},
-            {'title': 'Проблема', 'description': 'Опишите проблему или вызов'},
-            {'title': 'Решение', 'description': 'Предложите ваше решение'},
-            {'title': 'Результаты', 'description': 'Покажите достижения и метрики'},
-            {'title': 'Призыв к действию', 'description': 'Следующие шаги'}
+            {'title': 'Титульный слайд', 'description': 'Название, компания, контекст'},
+            {'title': 'Контекст и проблема', 'description': 'Текущая ситуация, вызовы'},
+            {'title': 'Наше решение/продукт', 'description': 'Предлагаемое решение'},
+            {'title': 'Ценность и выгоды', 'description': 'Какую пользу приносит'},
+            {'title': 'Ключевые функции', 'description': 'Основные возможности'},
+            {'title': 'Результаты/кейсы', 'description': 'Достижения, примеры'},
+            {'title': 'План/дорожная карта', 'description': 'Планы развития'},
+            {'title': 'Команда/ресурсы', 'description': 'Кто реализует'},
+            {'title': 'Следующие шаги/CTA', 'description': 'Призыв к действию'},
+            {'title': 'Контакты', 'description': 'Как связаться'}
         ],
-        'tips': 'Фокус на фактах, данных и конкретных результатах. Используйте графики и диаграммы.'
+        'tips': 'Деловой уверенный тон без пафоса. Простой язык для бизнес-аудитории. Фокус на фактах и результатах.'
     },
-    'sales': {
-        'name_ru': 'Продажи',
-        'name_en': 'Sales Pitch',
-        'icon': '💰',
+    'scientific': {
+        'name_ru': 'Научная презентация',
+        'name_en': 'Scientific Presentation',
+        'icon': '🔬',
         'color': '#27ae60',
+        'temperature': 0.2,  # Academic, formal, highly detailed and precise
         'structure': [
-            {'title': 'Hook', 'description': 'Привлеките внимание с первых секунд'},
-            {'title': 'Проблема', 'description': 'Болевые точки клиента'},
-            {'title': 'Решение', 'description': 'Ваш продукт/услуга'},
-            {'title': 'Преимущества', 'description': 'Уникальные особенности'},
-            {'title': 'Цена', 'description': 'Ценовое предложение'},
-            {'title': 'Демонстрация', 'description': 'Примеры и кейсы'},
-            {'title': 'Призыв к действию', 'description': 'Закрытие сделки'}
+            {'title': 'Титул и тема исследования', 'description': 'Название работы'},
+            {'title': 'Введение и актуальность', 'description': 'Почему это важно'},
+            {'title': 'Обзор литературы', 'description': 'Предыдущие работы'},
+            {'title': 'Цель и задачи', 'description': 'Что исследуем'},
+            {'title': 'Методология', 'description': 'Как исследовали'},
+            {'title': 'Основные результаты', 'description': 'Данные и цифры'},
+            {'title': 'Сравнение и обсуждение', 'description': 'Анализ результатов'},
+            {'title': 'Выводы', 'description': 'Главные заключения'},
+            {'title': 'Дальнейшие исследования', 'description': 'Перспективы'},
+            {'title': 'Источники и благодарности', 'description': 'Литература'}
         ],
-        'tips': 'Эмоциональность + конкретика. Покажите ROI и быстрые победы.'
+        'tips': 'Академический формальный стиль. Осторожные формулировки ("по данным исследований", "согласно литературе"). Максимум структурированности, минимум субъективности.'
     },
-    'investor': {
-        'name_ru': 'Инвестиционный питч',
-        'name_en': 'Investor Pitch',
-        'icon': '📈',
-        'color': '#e67e22',
-        'structure': [
-            {'title': 'Проблема', 'description': 'Глобальная проблема на рынке'},
-            {'title': 'Решение', 'description': 'Инновационное решение'},
-            {'title': 'Рынок', 'description': 'Размер и потенциал рынка'},
-            {'title': 'Бизнес-модель', 'description': 'Как вы зарабатываете'},
-            {'title': 'Команда', 'description': 'Ключевые люди'},
-            {'title': 'Финансы', 'description': 'Прогнозы и потребность в капитале'},
-            {'title': 'Призыв к действию', 'description': 'Инвестиционное предложение'}
-        ],
-        'tips': 'Масштабируемость, рост, команда. Фокус на цифрах и потенциале.'
-    },
-    'educational': {
-        'name_ru': 'Образовательная',
-        'name_en': 'Educational',
-        'icon': '🎓',
+    'general': {
+        'name_ru': 'Общая презентация',
+        'name_en': 'General Presentation',
+        'icon': '📊',
         'color': '#3498db',
+        'temperature': 0.7,  # Friendly, explaining tone
         'structure': [
-            {'title': 'Введение', 'description': 'Цели и обзор темы'},
-            {'title': 'Теория', 'description': 'Основные концепции'},
-            {'title': 'Примеры', 'description': 'Практические примеры'},
-            {'title': 'Практика', 'description': 'Упражнения и задания'},
-            {'title': 'Выводы', 'description': 'Ключевые моменты'},
-            {'title': 'Вопросы', 'description': 'Q&A и дополнительные материалы'}
+            {'title': 'Титульный слайд', 'description': 'Тема и цели'},
+            {'title': 'Почему тема важна', 'description': 'Актуальность и значимость'},
+            {'title': 'Ключевые понятия', 'description': 'Основные термины'},
+            {'title': 'Основные идеи', 'description': 'Главные принципы'},
+            {'title': 'Примеры из жизни', 'description': 'Практические кейсы'},
+            {'title': 'Пошаговое объяснение', 'description': 'Детальный разбор'},
+            {'title': 'Типичные ошибки', 'description': 'Чего избегать'},
+            {'title': 'Краткое резюме', 'description': 'Основные выводы'},
+            {'title': 'Вопросы для самопроверки', 'description': 'Проверка знаний'},
+            {'title': 'Дополнительные ресурсы', 'description': 'Для углубленного изучения'}
         ],
-        'tips': 'Ясность, структура, повторение. Используйте визуализацию и примеры.'
-    },
-    'startup': {
-        'name_ru': 'Стартап-питч',
-        'name_en': 'Startup Pitch',
-        'icon': '🚀',
-        'color': '#9b59b6',
-        'structure': [
-            {'title': 'Проблема', 'description': 'Какую проблему решаете'},
-            {'title': 'Решение', 'description': 'Ваш продукт/сервис'},
-            {'title': 'Рынок', 'description': 'Размер и возможности'},
-            {'title': 'Бизнес-модель', 'description': 'Как зарабатываете'},
-            {'title': 'Traction', 'description': 'Первые результаты'},
-            {'title': 'Команда', 'description': 'Кто за этим стоит'},
-            {'title': 'Ask', 'description': 'Что нужно для роста'}
-        ],
-        'tips': 'Продукт, тракшн, команда. Покажите momentum и потенциал роста.'
+        'tips': 'Дружелюбный объясняющий стиль. Много примеров и простых формулировок. Язык доступный для широкой аудитории.'
     }
 }
 
@@ -550,113 +633,153 @@ SUPPORTED_LANGUAGES = {
     'fr': 'French'
 }
 
-# AI role prompts per presentation type and language
+# AI role prompts per presentation type and language - REFACTORED TO 3 TYPES
 def get_ai_role_prompt(presentation_type, language):
     """Get AI system role prompt based on presentation type and language"""
     prompts = {
         'business': {
-            'ru': "Ты опытный бизнес-консультант. Создай профессиональную бизнес-презентацию на русском языке.",
-            'en': "You are an experienced business consultant. Create a professional business presentation in English.",
-            'es': "Eres un consultor de negocios experimentado. Crea una presentación empresarial profesional en español.",
-            'zh': "你是一位经验丰富的商业顾问。请用中文创建专业的商务演示文稿。",
-            'fr': "Vous êtes un consultant en affaires expérimenté. Créez une présentation professionnelle en français."
+            'ru': "Ты опытный бизнес-консультант и стратег. Создай деловую презентацию о компании, продукте или результатах. Используй деловой уверенный тон без пафоса, простой язык для бизнес-аудитории. Фокус на фактах, данных, конкретных результатах.",
+            'en': "You are an experienced business consultant and strategist. Create a business presentation about company, product or results. Use confident professional tone without hype, simple language for business audience. Focus on facts, data, and concrete results.",
+            'es': "Eres un consultor empresarial experimentado. Crea una presentación empresarial profesional en español con tono confiado y lenguaje simple.",
+            'zh': "你是经验丰富的商业顾问。请用中文创建专业的商务演示文稿，使用自信的语调。",
+            'fr': "Vous êtes un consultant en affaires expérimenté. Créez une présentation professionnelle en français avec un ton confiant."
         },
-        'sales': {
-            'ru': "Ты эксперт по продажам. Создай мощный sales pitch на русском языке.",
-            'en': "You are a sales expert. Create a strong sales pitch in English.",
-            'es': "Eres un experto en ventas. Crea un poderoso pitch de ventas en español.",
-            'zh': "你是销售专家。请用中文创建有力的销售演示文稿。",
-            'fr': "Vous êtes un expert en ventes. Créez un argumentaire de vente puissant en français."
+        'scientific': {
+            'ru': "Ты научный исследователь с академическим опытом. Создай научную презентацию-доклад с фактами и цифрами. Используй академический формальный стиль, осторожные формулировки (\"по данным исследований\", \"в литературе описано\"). Максимум структурированности, минимум субъективности.",
+            'en': "You are a scientific researcher with academic experience. Create a scientific presentation-report with facts and figures. Use academic formal style, careful formulations ('according to research', 'described in literature'). Maximum structure, minimum subjectivity.",
+            'es': "Eres investigador científico. Crea una presentación científica en español con estilo formal y datos.",
+            'zh': "你是科学研究员。请用中文创建科学演示文稿，使用正式风格。",
+            'fr': "Vous êtes chercheur scientifique. Créez une présentation scientifique en français avec style formel."
         },
-        'investor': {
-            'ru': "Ты опытный инвестор-стартапер. Создай инвесторскую презентацию на русском.",
-            'en': "You are a seasoned startup investor. Create an investor pitch deck in English.",
-            'es': "Eres un inversor experimentado. Crea una presentación para inversores en español.",
-            'zh': "你是一名资深投资人。请用中文创建投资者路演文稿。",
-            'fr': "Vous êtes un investisseur aguerri. Créez une présentation pour investisseurs en français."
-        },
-        'educational': {
-            'ru': "Ты профессиональный преподаватель. Создай учебную презентацию на русском.",
-            'en': "You are a professional educator. Create an educational presentation in English.",
-            'es': "Eres un educador profesional. Crea una presentación educativa en español.",
-            'zh': "你是专业教师。请用中文创建教育演示文稿。",
-            'fr': "Vous êtes un éducateur professionnel. Créez une présentation éducative en français."
-        },
-        'startup': {
-            'ru': "Ты фаундер стартапа. Создай питч для стартапа на русском.",
-            'en': "You are a startup founder. Create a startup pitch in English.",
-            'es': "Eres fundador de una startup. Crea un pitch de startup en español.",
-            'zh': "你是一名创业者。请用中文创建创业演示文稿。",
-            'fr': "Vous êtes fondateur d'une startup. Créez un pitch de startup en français."
+        'general': {
+            'ru': "Ты профессиональный спикер и преподаватель. Создай общую презентацию для объяснения темы широкой аудитории. Используй дружелюбный объясняющий стиль, много примеров, простые формулировки. Доступный язык для школьников, студентов, любознательных людей.",
+            'en': "You are a professional speaker and educator. Create a general presentation to explain a topic to broad audience. Use friendly explaining style, many examples, simple formulations. Accessible language for students and curious people.",
+            'es': "Eres un educador profesional. Crea una presentación general en español con estilo amigable y muchos ejemplos.",
+            'zh': "你是专业教师。请用中文创建通用演示文稿，使用友好的解释风格。",
+            'fr': "Vous êtes un éducateur professionnel. Créez une présentation générale en français avec un style amical."
         }
     }
     # Default to business/en if not found
     return prompts.get(presentation_type, prompts['business']).get(language, prompts['business']['en'])
 
-# System prompts per presentation type
+# System prompts per presentation type - REFACTORED TO 3 TYPES WITH BULLET-POINTS FOCUS
 SYSTEM_PROMPTS = {
-    'sales': (
-        'Ты опытный продажник с 10+ летним стажем в B2B и B2C. Твоя задача — создать убедительную Sales Pitch презентацию, которая продаёт. Используй эти принципы:\n'
-        '- Начни с проблемы клиента (боль, которую он испытывает)\n'
-        '- Покажи уникальное решение (почему именно твой продукт)\n'
-        '- Подчеркни выгоды и преимущества перед конкурентами\n'
-        '- Добавь социальные доказательства (кейсы, отзывы, цифры)\n'
-        '- Заверши сильным призывом к действию (CTA: купить, попробовать, демо)\n'
-        'Используй активный, убеждающий язык. Часто используй слова: "выгода", "сэкономить", "результат", "рост".'
-    ),
-    'investor': (
-        'Ты опытный предприниматель и инвестор, знаешь, как привлекать денег. Создаёшь Investor Pitch для венчурных фондов. Используй эти принципы:\n'
-        '- Определи большую проблему на рынке (Problem)\n'
-        '- Покажи масштабируемое решение (Solution)\n'
-        '- Приведи размер рынка (TAM, SAM, SOM — покажи масштаб)\n'
-        '- Объясни бизнес-модель (как зарабатываем, unit-экономика)\n'
-        '- Укажи конкурентное преимущество\n'
-        '- Опиши команду (опыт, достижения)\n'
-        '- Приведи финансовые показатели и прогнозы (выручка, рост, прибыль)\n'
-        '- Скажи, сколько денег нужно и на что потратишь\n'
-        'Язык: ориентирован на цифры, ROI, масштабируемость, потенциал роста. Впечатляй данными.'
-    ),
     'business': (
-        'Ты опытный бизнес-консультант. Создаёшь Business Presentation для внутренних встреч и партнёров. Используй эти принципы:\n'
-        '- Введение и контекст ситуации\n'
-        '- Описание ключевых вызовов/проблем\n'
-        '- Наш подход к решению\n'
-        '- Результаты и метрики (данные, графики)\n'
-        '- Следующие шаги и рекомендации\n'
-        'Язык: профессиональный, ориентирован на факты, данные, результаты. Не слишком продающий, но убеждающий.'
+        'Ты опытный бизнес-консультант и аналитик с 10+ летним опытом. '
+        'Создаёшь деловую презентацию о компании, продукте, результатах или бизнес-инициативе.\n\n'
+        'ПРИНЦИПЫ:\n'
+        '- Первый слайд - титульный: название темы, подзаголовок (для кого, о чём)\n'
+        '- Проблема/контекст (почему это актуально)\n'
+        '- Предлагаемое решение/продукт\n'
+        '- Ценность и выгоды для клиента\n'
+        '- Результаты, кейсы, метрики (цифры, данные)\n'
+        '- Последний слайд: итоги + Call To Action (следующие шаги)\n\n'
+        'ФОРМАТ ТЕКСТА:\n'
+        '- На каждом слайде только тезисы (3–6 пунктов)\n'
+        '- Каждый тезис - 1–2 предложения максимум\n'
+        '- Никаких абзацев и длинных описаний\n'
+        '- Каждый тезис несёт новую конкретную информацию\n\n'
+        'СТИЛЬ: Деловой, конкретный, без художественных оборотов. Акцент на выгодах, результатах, цифрах, действиях.'
     ),
-    'educational': (
-        'Ты опытный учитель и методист с опытом создания обучающих курсов. Создаёшь Educational презентацию для студентов или сотрудников. Используй эти принципы:\n'
-        '- Определи цели обучения (что они научатся)\n'
-        '- Объясни теорию пошагово (основные концепции, простым языком)\n'
-        '- Приведи практические примеры и аналогии\n'
-        '- Предложи упражнения для закрепления\n'
-        '- Резюмируй ключевые выводы\n'
-        'Язык: простой, доступный, с примерами и визуализациями. Часто: "например", "представьте", "для практики".'
+    'scientific': (
+        'Ты учёный и исследователь. '
+        'Создаёшь научную презентацию-доклад об исследовании, гипотезах, методах, результатах и выводах. '
+        'Строго относишься к фактам.\n\n'
+        'ПРИНЦИПЫ:\n'
+        '- Первый слайд: название исследования + область\n'
+        '- Введение: контекст, актуальность, обзор литературы\n'
+        '- Цель и гипотезы исследования\n'
+        '- Методология (кратко: как проводили исследование)\n'
+        '- Основные результаты (данные, графики, таблицы)\n'
+        '- Обсуждение и сравнение с литературой\n'
+        '- Последний слайд: заключение (краткие выводы)\n\n'
+        'ФОРМАТ ТЕКСТА:\n'
+        '- На каждом слайде только тезисы (3–6 пунктов)\n'
+        '- Каждый тезис - 1–2 предложения максимум\n'
+        '- Разделяй факты, гипотезы и предположения\n'
+        '- Используй осторожные формулировки: "по данным", "согласно литературе", "наблюдается"\n\n'
+        'СТИЛЬ: Научный, формальный, структурированный. Максимум структуры, минимум субъективности.'
+    ),
+    'general': (
+        'Ты опытный спикер и преподаватель. '
+        'Создаёшь общую презентацию для объяснения сложных тем широкой аудитории. '
+        'Умеешь просто и интересно рассказывать.\n\n'
+        'ПРИНЦИПЫ:\n'
+        '- Первый слайд: название темы + короткое описание\n'
+        '- Почему тема важна (актуальность)\n'
+        '- Основные понятия и термины (просто)\n'
+        '- Ключевые идеи и практические шаги (по 1 идее на слайд)\n'
+        '- Примеры, кейсы из жизни, типичные ошибки\n'
+        '- Последний слайд: summary + что делать дальше (3–5 шагов)\n\n'
+        'ФОРМАТ ТЕКСТА:\n'
+        '- На каждом слайде только тезисы (3–6 пунктов)\n'
+        '- Каждый тезис - 1–2 предложения максимум\n'
+        '- Никаких абзацев, только чёткие пункты\n'
+        '- Можно использовать вопросы к аудитории (умеренно)\n\n'
+        'СТИЛЬ: Понятный, дружелюбный, с примерами из жизни. Доступно для школьников и студентов.'
     )
 }
 
-# Structure generator per type
+# Structure generator per type - REFACTORED TO 3 TYPES (5-10 SLIDES)
 def get_slide_structure_by_type(presentation_type: str, num_slides: int):
+    """
+    Generate slide sequence for given presentation type.
+    Returns list of slide roles/purposes based on type.
+    Slides: 5-10 range (enforced).
+    """
     seq = []
     t = presentation_type
-    n = max(3, min(10, num_slides))
-    if t == 'sales':
-        seq = ['Title/Hook'] + ['Customer Problem']*2 + ['Solution & Uniqueness']*2 + ['Benefits & Advantages']*2 + ['Social Proof']*2 + ['Pricing/Offer'] + ['Call-to-Action']*2
-    elif t == 'investor':
-        seq = ['Problem', 'Solution', 'Market Size', 'Business Model']*1 + ['Business Model'] + ['Competitors & Advantages', 'Team'] + ['Financials & Metrics']*2 + ['Use of Funds']*2 + ['The Ask']
-    elif t == 'business':
-        seq = ['Intro/Title'] + ['Context/Situation']*2 + ['Key Challenges']*2 + ['Our Approach']*2 + ['Results & Metrics']*2 + ['Next Steps']
-    elif t == 'startup':
-        seq = ['Title/Hook', 'Problem', 'Solution', 'Market Opportunity', 'Business Model', 'Traction', 'Team', 'Roadmap', 'Financials', 'The Ask']
-    else:  # educational
-        seq = ['Learning Objectives'] + ['Theory']*3 + ['Examples']*4 + ['Exercises']*4 + ['Key Takeaways']*3
-    # Trim or expand
+    n = max(5, min(10, num_slides))  # Enforce 5-10 slides range
+    
+    if t == 'business':
+        # Business: Title, Problem/Context, Solution, Value, Results, Plan, Team, CTA, Contacts
+        seq = [
+            'Title/Company',
+            'Problem & Context',
+            'Our Solution/Product',
+            'Value & Benefits',
+            'Key Features',
+            'Results & Cases',
+            'Plan/Roadmap',
+            'Team/Resources',
+            'Next Steps/CTA',
+            'Contacts'
+        ]
+    elif t == 'scientific':
+        # Scientific: Title, Intro, Literature, Goals, Methods, Results, Discussion, Conclusion, Future, References
+        seq = [
+            'Title & Research Topic',
+            'Introduction & Relevance',
+            'Literature Review',
+            'Goals & Hypotheses',
+            'Methodology',
+            'Main Results',
+            'Comparison & Discussion',
+            'Conclusions',
+            'Future Research',
+            'References & Acknowledgments'
+        ]
+    else:  # 'general'
+        # General: Title, Why Important, Key Concepts, Main Ideas, Examples, Explanation, Mistakes, Summary, Resources
+        # REMOVED: 'Self-Check Questions' (quiz/assessment slides not allowed)
+        seq = [
+            'Title & Topic',
+            'Why This Matters',
+            'Key Concepts',
+            'Main Ideas',
+            'Real-Life Examples',
+            'Step-by-Step Explanation',
+            'Common Mistakes',
+            'Summary',
+            'Additional Resources'
+        ]
+    
+    # Trim or expand to fit n slides
     if len(seq) >= n:
         return seq[:n]
     else:
-        # Pad last item
-        return seq + [seq[-1]]*(n-len(seq))
+        # Pad with last item if needed (rare case)
+        return seq + [seq[-1]] * (n - len(seq))
 
 # Get presentation type info safely
 def get_presentation_type_info(presentation_type: str):
@@ -722,6 +845,204 @@ def detect_language(text):
         return 'en'
 
 
+def detect_presentation_content_type(topic, slide_title, slide_content):
+    """
+    Detect the conceptual presentation type from content analysis.
+    Returns one of: 'scientific', 'business', 'historical', 'technology', 
+                    'philosophical', 'humanities', 'educational'
+    
+    This is different from user-selected presentation_type (business/scientific/general).
+    This analyzes WHAT the content is about, not HOW it should be structured.
+    """
+    # Combine all text for analysis
+    combined_text = f"{topic} {slide_title} {slide_content}".lower()
+    
+    # Scientific indicators (highest priority)
+    scientific_keywords = [
+        'research', 'study', 'experiment', 'hypothesis', 'data', 'methodology',
+        'результаты', 'исследование', 'эксперимент', 'гипотеза', 'методология',
+        'laboratory', 'лаборатория', 'scientific', 'науч', 'analysis', 'анализ',
+        'theory', 'теория', 'conclusion', 'вывод', 'findings', 'evidence'
+    ]
+    
+    # Technology indicators
+    tech_keywords = [
+        'software', 'algorithm', 'artificial intelligence', 'ai', 'machine learning',
+        'программ', 'алгоритм', 'нейр', 'digital', 'цифров', 'computer', 'код',
+        'blockchain', 'cloud', 'cybersecurity', 'кибербезопасность', 'innovation'
+    ]
+    
+    # Business indicators
+    business_keywords = [
+        'market', 'revenue', 'profit', 'strategy', 'customer', 'product',
+        'рынок', 'прибыль', 'стратегия', 'клиент', 'продукт', 'бизнес',
+        'sales', 'продаж', 'investment', 'инвестиц', 'growth', 'рост',
+        'company', 'компания', 'management', 'менеджмент'
+    ]
+    
+    # Historical indicators
+    historical_keywords = [
+        'history', 'historical', 'century', 'век', 'историч', 'ancient',
+        'medieval', 'средневеков', 'revolution', 'революц', 'war', 'войн',
+        'empire', 'империя', 'dynasty', 'династия', 'civilization'
+    ]
+    
+    # Philosophical/theoretical indicators
+    philosophical_keywords = [
+        'philosophy', 'филосо', 'concept', 'концеп', 'theory', 'теория',
+        'ethics', 'этика', 'meaning', 'смысл', 'existence', 'сущест',
+        'consciousness', 'сознание', 'logic', 'логика', 'metaphysics'
+    ]
+    
+    # Humanities indicators (culture, art, society)
+    humanities_keywords = [
+        'culture', 'культур', 'art', 'искусство', 'society', 'общество',
+        'literature', 'литератур', 'music', 'музык', 'painting', 'живопись',
+        'social', 'социальн', 'anthropology', 'антропология', 'psychology'
+    ]
+    
+    # Count matches for each category
+    scores = {
+        'scientific': sum(1 for kw in scientific_keywords if kw in combined_text),
+        'technology': sum(1 for kw in tech_keywords if kw in combined_text),
+        'business': sum(1 for kw in business_keywords if kw in combined_text),
+        'historical': sum(1 for kw in historical_keywords if kw in combined_text),
+        'philosophical': sum(1 for kw in philosophical_keywords if kw in combined_text),
+        'humanities': sum(1 for kw in humanities_keywords if kw in combined_text)
+    }
+    
+    # Get type with highest score (default to 'educational' if no clear match)
+    max_score = max(scores.values())
+    if max_score == 0:
+        return 'educational'
+    
+    # Return the category with highest score
+    detected_type = max(scores, key=scores.get)
+    print(f"  🎯 Content type detected: {detected_type} (score: {max_score})")
+    return detected_type
+
+
+def generate_intelligent_image_query(slide_title, slide_content, topic, presentation_type, content_type=None):
+    """
+    Generate intelligent image search query based on:
+    1. Presentation type (business/scientific/general) - user selected structure
+    2. Content type (scientific/business/historical/etc) - detected from content
+    3. Slide title and content keywords
+    
+    Returns: (english_query, original_language_query, image_type_category, description)
+    
+    Image type categories:
+    - scientific: laboratory, research, diagrams, data visualization
+    - corporate: team, office, graphs, business meeting
+    - conceptual: abstract, infographic, diagram, visualization
+    - historical: archival, portrait, historical scene, period-specific
+    - tech: code, server, AI, digital, futuristic
+    - real-world: people, nature, society, culture
+    """
+    # Auto-detect content type if not provided
+    if content_type is None:
+        content_type = detect_presentation_content_type(topic, slide_title, slide_content)
+    
+    # Extract keywords from title (2-3 main terms)
+    title_words = re.findall(r'\b\w{4,}\b', slide_title.lower())  # Words 4+ chars
+    
+    # Extract keywords from first sentence of content (1-2 terms)
+    first_sentence = slide_content.split('.')[0] if '.' in slide_content else slide_content[:100]
+    content_words = re.findall(r'\b\w{5,}\b', first_sentence.lower())  # Words 5+ chars
+    
+    # Remove common stopwords
+    stopwords = {
+        'this', 'that', 'what', 'which', 'when', 'where', 'how', 'why',
+        'это', 'этот', 'который', 'когда', 'где', 'как', 'почему',
+        'introduction', 'conclusion', 'summary', 'overview',
+        'введение', 'заключение', 'резюме', 'обзор'
+    }
+    
+    title_keywords = [w for w in title_words if w not in stopwords][:3]
+    content_keywords = [w for w in content_words if w not in stopwords][:2]
+    
+    # Determine image category and modifiers based on content type
+    image_category = 'conceptual'  # default
+    modifiers = []
+    
+    if content_type == 'scientific':
+        image_category = 'scientific'
+        modifiers = ['laboratory', 'research', 'scientific', 'experiment', 'data']
+    elif content_type == 'business':
+        image_category = 'corporate'
+        modifiers = ['professional', 'business', 'modern office', 'team collaboration']
+    elif content_type == 'technology':
+        image_category = 'tech'
+        modifiers = ['technology', 'digital', 'innovation', 'futuristic', 'code']
+    elif content_type == 'historical':
+        image_category = 'historical'
+        modifiers = ['historical', 'archival', 'vintage', 'period', 'documentary']
+    elif content_type == 'philosophical':
+        image_category = 'conceptual'
+        modifiers = ['abstract', 'concept', 'visualization', 'diagram', 'infographic']
+    elif content_type == 'humanities':
+        image_category = 'real-world'
+        modifiers = ['people', 'culture', 'society', 'art', 'nature']
+    else:  # educational or general
+        image_category = 'conceptual'
+        modifiers = ['educational', 'diagram', 'illustration', 'infographic']
+    
+    # Build search query components
+    # Format: [main_keywords] + [category_modifier] + [quality_filter]
+    
+    # Translate keywords if needed
+    translated_keywords = []
+    for kw in (title_keywords + content_keywords):
+        if CYRILLIC_RE.search(kw):
+            translated = translate_keyword_to_english(kw, topic)
+            if translated and translated != kw:
+                translated_keywords.append(translated)
+            else:
+                translated_keywords.append(kw)
+        else:
+            translated_keywords.append(kw)
+    
+    # Select 1-2 best modifiers
+    selected_modifiers = modifiers[:2]
+    
+    # Build final English query
+    query_parts = translated_keywords[:2] + selected_modifiers[:1]
+    english_query = ' '.join(query_parts)
+    
+    # Build original language query (for display)
+    original_parts = (title_keywords + content_keywords)[:3]
+    if detect_language(topic) == 'ru':
+        original_query = ' '.join(original_parts)
+    else:
+        original_query = english_query
+    
+    # Generate description of what image should show
+    if detect_language(topic) == 'ru':
+        descriptions = {
+            'scientific': 'Научное оборудование, лаборатория, исследователи за работой, научные диаграммы или графики',
+            'corporate': 'Профессиональная рабочая среда, команда в офисе, деловая встреча, бизнес-графики',
+            'tech': 'Современные технологии, компьютеры, код на экране, цифровые инновации, AI-системы',
+            'historical': 'Исторические фотографии, архивные материалы, портреты исторических личностей',
+            'conceptual': 'Абстрактная визуализация концепции, диаграмма идей, инфографика',
+            'real-world': 'Реальные люди, культурные сцены, общество, природа, искусство'
+        }
+    else:
+        descriptions = {
+            'scientific': 'Scientific equipment, laboratory, researchers at work, scientific diagrams or charts',
+            'corporate': 'Professional work environment, team in office, business meeting, business charts',
+            'tech': 'Modern technology, computers, code on screen, digital innovations, AI systems',
+            'historical': 'Historical photographs, archival materials, portraits of historical figures',
+            'conceptual': 'Abstract concept visualization, idea diagrams, infographics',
+            'real-world': 'Real people, cultural scenes, society, nature, art'
+        }
+    
+    description = descriptions.get(image_category, descriptions['conceptual'])
+    
+    print(f"  🖼️ Image search: '{english_query}' | Category: {image_category}")
+    
+    return english_query, original_query, image_category, description
+
+
 def generate_slide_content_in_language(topic, num_slides, language='en', presentation_type='business'):
     """
     Generate slide content using OpenAI ChatGPT API in the specified language
@@ -734,6 +1055,7 @@ def generate_slide_content_in_language(topic, num_slides, language='en', present
         type_info = get_presentation_type_info(presentation_type)
         structure_guide = type_info.get('structure', [])
         tips = type_info.get('tips', '')
+        temperature = type_info.get('temperature', 0.7)  # Get type-specific temperature
         
         # Build structure guidance string from type-specific sequence
         guided_sequence = get_slide_structure_by_type(presentation_type, num_slides)
@@ -781,7 +1103,10 @@ def generate_slide_content_in_language(topic, num_slides, language='en', present
    • Каждый слайд должен иметь свой авторский стиль изложения
 
 4. ФОРМАТ КОНТЕНТА:
-   • Каждый слайд: 3-4 предложения с КОНКРЕТНЫМИ деталями
+   • Каждый слайд: 3-6 тезисов (bullet points)
+   • Каждый тезис - 1-2 предложения максимум
+   • НЕ используй длинные абзацы - только чёткие пункты
+   • Каждый пункт несёт новую конкретную информацию
    • Минимум 1-2 неожиданных факта на слайд
    • Используй аналогии, сравнения, критический анализ
    • Последний слайд: прогнозы, открытые вопросы, вызовы для будущих исследований
@@ -1062,7 +1387,7 @@ No markdown, no additional text."""
                 {'role': 'system', 'content': f"{system_prompt}\n\nAlways respond with valid JSON only. Generate content in {language_name}."},
                 {'role': 'user', 'content': prompt}
             ],
-            'temperature': 0.8,  # Increased for more creative, unique content
+            'temperature': temperature,  # Use type-specific temperature (0.2 for scientific, 0.6 for business, 0.7 for general)
             'max_tokens': 2500  # Increased for detailed, in-depth responses
         }
         
@@ -1283,17 +1608,40 @@ def can_make_api_call(service):
     return True
 
 
-def search_pexels_image(query, retries=2):
+# ============================================================================
+# IMAGE PROVIDER LAYER - Multi-source image fetching
+# ============================================================================
+# This layer provides a unified interface for fetching images from multiple
+# sources (Pexels, Unsplash) with automatic fallback and error handling
+
+def fetch_images_from_pexels(query, count=1, retries=2):
     """
-    Search for image on Pexels with retry logic
-    Returns: (image_url, photographer_name) or (None, None)
+    Fetch images from Pexels API
+    
+    Args:
+        query: Search query string
+        count: Number of images to fetch (default: 1)
+        retries: Number of retry attempts (default: 2)
+    
+    Returns:
+        List of dicts with unified format:
+        [
+            {
+                'url': 'https://...',
+                'author': 'Photographer Name',
+                'source': 'Pexels',
+                'source_link': 'https://pexels.com/photo/...', 
+                'attribution': 'Photo by Name on Pexels'
+            }
+        ]
+        Returns empty list if no results or error
     """
     if not PEXELS_API_KEY:
         print("  ⚠ Pexels API key not configured")
-        return None, None
+        return []
     
     if not can_make_api_call('pexels'):
-        return None, None
+        return []
     
     for attempt in range(retries):
         try:
@@ -1305,7 +1653,7 @@ def search_pexels_image(query, retries=2):
             
             params = {
                 'query': query_clean,
-                'per_page': 1,
+                'per_page': count,
                 'orientation': 'landscape'
             }
             
@@ -1323,14 +1671,20 @@ def search_pexels_image(query, retries=2):
                 data = response.json()
                 
                 if data.get('photos') and len(data['photos']) > 0:
-                    photo = data['photos'][0]
-                    image_url = photo['src']['large']
-                    photographer = photo['photographer']
-                    print(f"  ✓ Pexels: {photographer}")
-                    return image_url, f"Photo by {photographer} on Pexels"
+                    results = []
+                    for photo in data['photos'][:count]:
+                        results.append({
+                            'url': photo['src']['large'],
+                            'author': photo['photographer'],
+                            'source': 'Pexels',
+                            'source_link': photo.get('url', 'https://www.pexels.com'),
+                            'attribution': f"Photo by {photo['photographer']} on Pexels"
+                        })
+                    print(f"  ✓ Pexels: Found {len(results)} image(s)")
+                    return results
                 else:
                     print(f"  ✗ No Pexels results for '{query_clean}'")
-                    return None, None
+                    return []
             
             elif response.status_code == 429:  # Rate limit
                 print(f"  ⚠ Pexels rate limit hit (attempt {attempt + 1}/{retries})")
@@ -1338,35 +1692,43 @@ def search_pexels_image(query, retries=2):
                     import time
                     time.sleep(1)  # Wait before retry
                     continue
-                return None, None
+                return []
             
             else:
                 print(f"  ✗ Pexels API error: {response.status_code}")
-                return None, None
+                return []
         
         except requests.exceptions.Timeout:
             print(f"  ⚠ Pexels timeout (attempt {attempt + 1}/{retries})")
             if attempt < retries - 1:
                 continue
-            return None, None
+            return []
         
         except Exception as e:
             print(f"  ✗ Pexels error: {e}")
-            return None, None
+            return []
     
-    return None, None
+    return []
 
 
-def search_unsplash_image(query, retries=2):
+def fetch_images_from_unsplash(query, count=1, retries=2):
     """
-    Search for image on Unsplash with retry logic
-    Returns: (image_url, photographer_name) or (None, None)
+    Fetch images from Unsplash API
+    
+    Args:
+        query: Search query string
+        count: Number of images to fetch (default: 1)
+        retries: Number of retry attempts (default: 2)
+    
+    Returns:
+        List of dicts with unified format (same as fetch_images_from_pexels)
+        Returns empty list if no results or error
     """
     if not UNSPLASH_ACCESS_KEY:
-        return None, None  # Silent fail if not configured
+        return []  # Silent fail if not configured
     
     if not can_make_api_call('unsplash'):
-        return None, None
+        return []
     
     for attempt in range(retries):
         try:
@@ -1378,7 +1740,7 @@ def search_unsplash_image(query, retries=2):
             
             params = {
                 'query': query_clean,
-                'per_page': 1,
+                'per_page': count,
                 'orientation': 'landscape'
             }
             
@@ -1396,15 +1758,20 @@ def search_unsplash_image(query, retries=2):
                 data = response.json()
                 
                 if data.get('results') and len(data['results']) > 0:
-                    photo = data['results'][0]
-                    image_url = photo['urls']['regular']
-                    photographer = photo['user']['name']
-                    photographer_link = photo['user']['links']['html']
-                    print(f"  ✓ Unsplash: {photographer}")
-                    return image_url, f"Photo by {photographer} on Unsplash ({photographer_link})"
+                    results = []
+                    for photo in data['results'][:count]:
+                        results.append({
+                            'url': photo['urls']['regular'],
+                            'author': photo['user']['name'],
+                            'source': 'Unsplash',
+                            'source_link': photo['links']['html'],
+                            'attribution': f"Photo by {photo['user']['name']} on Unsplash"
+                        })
+                    print(f"  ✓ Unsplash: Found {len(results)} image(s)")
+                    return results
                 else:
                     print(f"  ✗ No Unsplash results for '{query_clean}'")
-                    return None, None
+                    return []
             
             elif response.status_code == 429:  # Rate limit
                 print(f"  ⚠ Unsplash rate limit hit (attempt {attempt + 1}/{retries})")
@@ -1412,70 +1779,155 @@ def search_unsplash_image(query, retries=2):
                     import time
                     time.sleep(1)
                     continue
-                return None, None
+                return []
             
             else:
                 print(f"  ✗ Unsplash API error: {response.status_code}")
-                return None, None
+                return []
         
         except requests.exceptions.Timeout:
             print(f"  ⚠ Unsplash timeout (attempt {attempt + 1}/{retries})")
             if attempt < retries - 1:
                 continue
-            return None, None
+            return []
         
         except Exception as e:
             print(f"  ✗ Unsplash error: {e}")
-            return None, None
+            return []
     
-    return None, None
+    return []
+
+
+def get_images(query, count=1, mode=None):
+    """
+    Unified image fetching function with multi-source support
+    
+    This is the main function used by the presentation generator.
+    It handles provider selection, fallback logic, and error handling.
+    
+    Args:
+        query: Search query string
+        count: Number of images to fetch (default: 1)
+        mode: Override provider mode ('pexels', 'unsplash', 'mixed')
+              If None, uses IMAGE_PROVIDER_MODE from config
+    
+    Returns:
+        List of image dicts with unified format (url, author, source, etc.)
+        Returns empty list if no images found
+    
+    Strategy:
+        - 'pexels': Only try Pexels
+        - 'unsplash': Only try Unsplash
+        - 'mixed': Try Pexels first, fallback to Unsplash if needed
+    """
+    if mode is None:
+        mode = IMAGE_PROVIDER_MODE
+    
+    results = []
+    
+    if mode == 'unsplash':
+        # Unsplash only
+        results = fetch_images_from_unsplash(query, count)
+    
+    elif mode == 'pexels':
+        # Pexels only
+        results = fetch_images_from_pexels(query, count)
+    
+    else:  # 'mixed' or default
+        # Try Pexels first (primary source)
+        results = fetch_images_from_pexels(query, count)
+        
+        if not results:
+            # Fallback to Unsplash if Pexels failed or returned nothing
+            print(f"  → Trying Unsplash as fallback...")
+            results = fetch_images_from_unsplash(query, count)
+    
+    return results
 
 
 def search_image(query):
     """
-    Search for image using multiple sources (Pexels + Unsplash)
-    Returns image URL or None
+    Legacy wrapper for backward compatibility
+    Searches for a single image and returns URL or None
+    
+    This function maintains compatibility with existing code that uses
+    the old search_image() interface.
     """
-    # Try Pexels first (primary source)
-    image_url, attribution = search_pexels_image(query)
-    
-    if image_url:
-        # Store attribution for later use (could be saved to metadata)
-        return image_url
-    
-    # Fallback to Unsplash if Pexels fails
-    image_url, attribution = search_unsplash_image(query)
-    
-    if image_url:
-        return image_url
-    
+    results = get_images(query, count=1)
+    if results and len(results) > 0:
+        return results[0]['url']
     return None
 
 
-def search_image_with_fallback(search_keyword, slide_title, main_topic, used_images):
+def search_pexels_image(query, retries=2):
     """
-    Search for image with multiple fallback attempts
-    Returns: (image_data, image_url) or (None, None)
+    Legacy wrapper for backward compatibility
+    Returns: (image_url, attribution) or (None, None)
     """
+    results = fetch_images_from_pexels(query, count=1, retries=retries)
+    if results and len(results) > 0:
+        img = results[0]
+        return img['url'], img['attribution']
+    return None, None
+
+
+def search_unsplash_image(query, retries=2):
+    """
+    Legacy wrapper for backward compatibility  
+    Returns: (image_url, attribution) or (None, None)
+    """
+    results = fetch_images_from_unsplash(query, count=1, retries=retries)
+    if results and len(results) > 0:
+        img = results[0]
+        return img['url'], img['attribution']
+    return None, None
+
+
+def search_image_with_fallback(search_keyword, slide_title, main_topic, used_images, presentation_type='business', slide_content=''):
+    """
+    Search for image with intelligent query generation and multiple fallback attempts.
+    Now uses AI-driven content analysis to select appropriate image types.
+    
+    Returns: (image_data, image_url, image_metadata) or (None, None, None)
+    image_metadata: dict with 'query', 'category', 'description'
+    """
+    # Generate intelligent image search query
+    english_query, original_query, image_category, description = generate_intelligent_image_query(
+        slide_title=slide_title,
+        slide_content=slide_content or '',
+        topic=main_topic,
+        presentation_type=presentation_type
+    )
+    
     attempts = []
-    translated = None
-    if CYRILLIC_RE.search(search_keyword or ''):
-        translated = translate_keyword_to_english(search_keyword, main_topic)
-        if translated:
-            print(f"  Search keyword: '{translated}'")
-            attempts.append((translated, "Translated keyword"))
-            first_word = translated.split()[0] if translated else ''
-            if first_word:
-                attempts.append((first_word, "First word"))
-    else:
-        if search_keyword:
-            print(f"  Search keyword: '{search_keyword}'")
+    
+    # Primary attempt: Intelligent query
+    if english_query:
+        attempts.append((english_query, f"Intelligent ({image_category})"))
+    
+    # Fallback 1: Original search keyword (if provided)
+    if search_keyword and search_keyword.strip():
+        if CYRILLIC_RE.search(search_keyword):
+            translated = translate_keyword_to_english(search_keyword, main_topic)
+            if translated and translated != english_query:
+                attempts.append((translated, "Translated keyword"))
+        elif search_keyword != english_query:
             attempts.append((search_keyword, "Original keyword"))
     
-    attempts.extend([
-        (slide_title, "Slide title"),
-        (main_topic, "Main topic")
-    ])
+    # Fallback 2: Slide title
+    if slide_title and slide_title != english_query:
+        attempts.append((slide_title, "Slide title"))
+    
+    # Fallback 3: Main topic
+    if main_topic and main_topic not in [a[0] for a in attempts[:3]]:
+        attempts.append((main_topic, "Main topic"))
+    
+    metadata = {
+        'query': english_query,
+        'original_query': original_query,
+        'category': image_category,
+        'description': description
+    }
     
     for query, attempt_name in attempts:
         if not query or query.strip() == "":
@@ -1489,11 +1941,11 @@ def search_image_with_fallback(search_keyword, slide_title, main_topic, used_ima
             try:
                 with open(cached_path, 'rb') as f:
                     image_data = io.BytesIO(f.read())
-                return image_data, cached_path
+                return image_data, cached_path, metadata
             except:
                 pass
         
-        # Search on Pexels
+        # Search on Pexels/Unsplash
         image_url = search_image(query)
         
         if image_url and image_url not in used_images:
@@ -1502,10 +1954,10 @@ def search_image_with_fallback(search_keyword, slide_title, main_topic, used_ima
             if image_data:
                 # Save to cache
                 cached_path = save_image_to_cache(image_data, query)
-                return image_data, image_url
+                return image_data, image_url, metadata
     
     print(f"  ✗ No unique image found after all attempts")
-    return None, None
+    return None, None, metadata
 
 
 def is_libretranslate_available():
@@ -1703,15 +2155,73 @@ PRESENTATION_THEMES = {
     }
 }
 
-def create_presentation(topic, slides_data, theme='light'):
+def filter_quiz_and_assessment_slides(slides_data):
     """
-    Create PowerPoint presentation with text and images
+    Filter out quiz, self-assessment, and review question slides.
+    These are not suitable for academic/professional presentations.
+    
+    Returns: (filtered_slides, removed_slides_info)
+    """
+    quiz_keywords = [
+        'quiz', 'test', 'self-check', 'self-assessment', 'questions for review',
+        'квиз', 'тест', 'самопроверка', 'вопросы для проверки', 'проверка знаний',
+        'check your knowledge', 'knowledge check', 'проверьте себя',
+        'review questions', 'повторение', 'practice questions'
+    ]
+    
+    filtered = []
+    removed = []
+    
+    for idx, slide in enumerate(slides_data):
+        title = slide.get('title', '').lower()
+        content = slide.get('content', '').lower()
+        
+        # Check if slide contains quiz/assessment keywords
+        is_quiz_slide = any(kw in title or kw in content for kw in quiz_keywords)
+        
+        # Additional check: slides with many question marks (likely quiz)
+        question_count = content.count('?')
+        has_many_questions = question_count >= 3
+        
+        if is_quiz_slide or has_many_questions:
+            removed.append({
+                'index': idx,
+                'title': slide.get('title', ''),
+                'reason': 'quiz/self-assessment content' if is_quiz_slide else 'multiple questions detected'
+            })
+            print(f"  ❌ Removed slide {idx + 1}: '{slide.get('title', '')}' ({removed[-1]['reason']})")
+        else:
+            filtered.append(slide)
+    
+    return filtered, removed
+
+
+def create_presentation(topic, slides_data, theme='light', presentation_type='business'):
+    """
+    Create PowerPoint presentation with text and images.
+    Now includes:
+    - Quiz/self-assessment slide filtering
+    - Intelligent image search based on content type
+    - Dynamic font sizing to prevent text overflow
     """
     print(f"\n{'#'*60}")
     print(f"# Creating presentation: {topic}")
-    print(f"# Total slides: {len(slides_data)}")
+    print(f"# Total slides (before filtering): {len(slides_data)}")
     print(f"# Theme: {theme}")
+    print(f"# Type: {presentation_type}")
     print(f"{'#'*60}\n")
+    
+    # Filter out quiz/self-assessment slides
+    print(f"\n📦 FILTERING QUIZ/ASSESSMENT SLIDES...")
+    slides_data, removed_slides = filter_quiz_and_assessment_slides(slides_data)
+    
+    if removed_slides:
+        print(f"\n⚠️ Removed {len(removed_slides)} quiz/assessment slide(s):")
+        for r in removed_slides:
+            print(f"  - Slide {r['index'] + 1}: '{r['title']}' ({r['reason']})")
+    
+    print(f"\n✅ Final slide count: {len(slides_data)} slides")
+    print(f"{'='*60}\n")
     
     # Get theme configuration
     theme_config = PRESENTATION_THEMES.get(theme, PRESENTATION_THEMES['light'])
@@ -1781,17 +2291,24 @@ def create_presentation(topic, slides_data, theme='light'):
             except Exception as e:
                 print(f"  ⚠ Failed to add left bar: {e}")
         
-        # Search and add image using specific keyword with fallback
+        # Search and add image using intelligent query generation
         search_term = slide_data.get('search_keyword', slide_data['title'])
         print(f"\n[Slide {idx + 1}/{len(slides_data)}] {slide_data['title']}")
         print(f"  Content: {slide_data['content'][:60]}...")
         
-        image_data, image_url = search_image_with_fallback(
+        image_data, image_url, image_metadata = search_image_with_fallback(
             search_keyword=search_term,
             slide_title=slide_data['title'],
             main_topic=topic,
-            used_images=used_images
+            used_images=used_images,
+            presentation_type=presentation_type,
+            slide_content=slide_data.get('content', '')
         )
+        
+        # Log intelligent image search results
+        if image_metadata:
+            print(f"  🎨 Image type: {image_metadata.get('category', 'N/A')}")
+            print(f"  🔍 Query: {image_metadata.get('query', 'N/A')}")
         
         if image_data and image_url:
             # Mark image as used
@@ -1811,10 +2328,20 @@ def create_presentation(topic, slides_data, theme='light'):
         else:
             print(f"  ⚠ Continuing without image (no unique image found)")
         
-        # Add content text (description) with length limit
+        # Add content text with improved overflow handling
         content_text = slide_data['content']
-        if len(content_text) > 500:
-            content_text = content_text[:500] + "..."
+        
+        # For first/last slides: more aggressive length limiting to prevent overflow
+        if is_title_slide or is_last_slide:
+            max_chars = 350  # Shorter limit for title/conclusion slides
+            if len(content_text) > max_chars:
+                content_text = content_text[:max_chars] + "..."
+                print(f"  ✂️ Content trimmed: {len(slide_data['content'])} → {len(content_text)} chars (title/last slide)")
+        else:
+            # Content slides can have more text
+            if len(content_text) > 500:
+                content_text = content_text[:500] + "..."
+                print(f"  ✂️ Content trimmed: {len(slide_data['content'])} → {len(content_text)} chars")
         content_box = slide.shapes.add_textbox(
             Inches(0.5), Inches(1.4),
             Inches(4.8), Inches(3.6)
@@ -1823,15 +2350,29 @@ def create_presentation(topic, slides_data, theme='light'):
         content_frame.word_wrap = True
         content_frame.text = content_text
         
-        # Format content text based on theme
-        # Dynamic font size based on content length
+        # Format content text based on theme and slide position
+        # Dynamic font size based on content length and slide type
         content_length = len(content_text)
-        if content_length > 250:
-            base_font_size = 14
-        elif content_length > 180:
-            base_font_size = 15
+        
+        # First/last slides need smaller fonts to prevent overflow
+        if is_title_slide or is_last_slide:
+            if content_length > 280:
+                base_font_size = 16
+            elif content_length > 220:
+                base_font_size = 17
+            elif content_length > 160:
+                base_font_size = 18
+            else:
+                base_font_size = 20
+            print(f"  🔤 Title/Last slide font: {base_font_size}pt (length: {content_length})")
         else:
-            base_font_size = 16
+            # Content slides
+            if content_length > 250:
+                base_font_size = 14
+            elif content_length > 180:
+                base_font_size = 15
+            else:
+                base_font_size = 16
         
         for paragraph in content_frame.paragraphs:
             paragraph.font.name = 'Roboto'
@@ -1871,10 +2412,310 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/pricing')
+def pricing():
+    """
+    Render pricing page with Stripe payment options
+    """
+    return render_template('pricing.html')
+
+
+# ============================================================================
+# STRIPE PAYMENT ROUTES
+# ============================================================================
+
+@app.route('/api/create-checkout-session', methods=['POST'])
+@login_required
+def create_checkout_session():
+    """
+    Create Stripe Checkout Session for payment
+    Accepts: plan_type (one_time, subscription, pro, premium)
+    Returns: sessionId and checkout URL
+    """
+    try:
+        # Check if Stripe is configured
+        if not STRIPE_SECRET_KEY:
+            return jsonify({
+                'error': 'Payment system not configured',
+                'message': 'Stripe is not configured on the server'
+            }), 500
+        
+        data = request.json
+        plan_type = data.get('plan_type', 'one_time')
+        
+        # Get user email for Stripe customer
+        user_email = current_user.email if hasattr(current_user, 'email') else None
+        
+        if not user_email:
+            return jsonify({'error': 'User email not found'}), 400
+        
+        # Define pricing based on plan type
+        # NOTE: You need to create these prices in your Stripe Dashboard
+        # and replace with actual price IDs
+        price_configs = {
+            'one_time': {
+                'mode': 'payment',
+                'price_data': {
+                    'currency': 'usd',
+                    'unit_amount': 999,  # $9.99
+                    'product_data': {
+                        'name': 'AI SlideRush - Single Purchase',
+                        'description': 'One-time access to create presentations',
+                    },
+                },
+                'quantity': 1,
+                'plan_name': 'one_time'
+            },
+            'subscription': {
+                'mode': 'subscription',
+                'price_data': {
+                    'currency': 'usd',
+                    'unit_amount': 1999,  # $19.99/month
+                    'recurring': {'interval': 'month'},
+                    'product_data': {
+                        'name': 'AI SlideRush - Monthly Subscription',
+                        'description': 'Unlimited presentations per month',
+                    },
+                },
+                'quantity': 1,
+                'plan_name': 'subscription'
+            },
+            'pro': {
+                'mode': 'payment',
+                'price_data': {
+                    'currency': 'usd',
+                    'unit_amount': 1999,  # $19.99
+                    'product_data': {
+                        'name': 'AI SlideRush - Pro Plan',
+                        'description': 'Pro features with advanced customization',
+                    },
+                },
+                'quantity': 1,
+                'plan_name': 'pro'
+            },
+            'premium': {
+                'mode': 'subscription',
+                'price_data': {
+                    'currency': 'usd',
+                    'unit_amount': 4999,  # $49.99/month
+                    'recurring': {'interval': 'month'},
+                    'product_data': {
+                        'name': 'AI SlideRush - Premium Subscription',
+                        'description': 'Unlimited presentations with priority support',
+                    },
+                },
+                'quantity': 1,
+                'plan_name': 'premium'
+            }
+        }
+        
+        if plan_type not in price_configs:
+            return jsonify({'error': f'Invalid plan type: {plan_type}'}), 400
+        
+        config = price_configs[plan_type]
+        
+        # Create Stripe Checkout Session
+        try:
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': config['price_data'],
+                    'quantity': config['quantity'],
+                }],
+                mode=config['mode'],
+                success_url=request.host_url + 'dashboard?payment=success',
+                cancel_url=request.host_url + 'dashboard?payment=cancelled',
+                customer_email=user_email,
+                client_reference_id=str(current_user.id),  # Store user ID for webhook
+                metadata={
+                    'user_id': str(current_user.id),
+                    'user_email': user_email,
+                    'plan_type': config['plan_name']
+                }
+            )
+            
+            print(f"✅ Stripe Checkout Session created: {checkout_session.id}")
+            print(f"   → User: {user_email} (ID: {current_user.id})")
+            print(f"   → Plan: {plan_type}")
+            print(f"   → Amount: ${config['price_data']['unit_amount'] / 100:.2f}")
+            
+            return jsonify({
+                'success': True,
+                'sessionId': checkout_session.id,
+                'url': checkout_session.url,
+                'plan_type': plan_type
+            })
+            
+        except stripe.error.StripeError as e:
+            print(f"❌ Stripe error: {e}")
+            return jsonify({
+                'error': 'Payment session creation failed',
+                'message': str(e)
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Error creating checkout session: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/stripe/webhook', methods=['POST'])
+def stripe_webhook():
+    """
+    Stripe webhook handler for payment events
+    Verifies webhook signature and processes checkout.session.completed
+    """
+    payload = request.data
+    sig_header = request.headers.get('Stripe-Signature')
+    
+    # Verify webhook signature (if secret is configured)
+    if STRIPE_WEBHOOK_SECRET:
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, STRIPE_WEBHOOK_SECRET
+            )
+            print(f"✅ Webhook signature verified: {event['type']}")
+        except ValueError as e:
+            # Invalid payload
+            print(f"❌ Webhook error: Invalid payload - {e}")
+            return jsonify({'error': 'Invalid payload'}), 400
+        except stripe.error.SignatureVerificationError as e:
+            # Invalid signature
+            print(f"❌ Webhook error: Invalid signature - {e}")
+            return jsonify({'error': 'Invalid signature'}), 400
+    else:
+        # No signature verification (INSECURE - only for development)
+        print("⚠️ Webhook signature verification SKIPPED (no STRIPE_WEBHOOK_SECRET)")
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError as e:
+            print(f"❌ Webhook error: Invalid JSON - {e}")
+            return jsonify({'error': 'Invalid JSON'}), 400
+    
+    # Handle the event
+    event_type = event['type']
+    print(f"\n{'='*60}")
+    print(f"📥 Stripe Webhook Event: {event_type}")
+    print(f"{'='*60}")
+    
+    if event_type == 'checkout.session.completed':
+        session = event['data']['object']
+        
+        # Extract customer information
+        customer_email = session.get('customer_details', {}).get('email')
+        client_reference_id = session.get('client_reference_id')  # User ID
+        metadata = session.get('metadata', {})
+        plan_type = metadata.get('plan_type', 'one_time')
+        stripe_customer_id = session.get('customer')
+        
+        print(f"Payment completed:")
+        print(f"  → Email: {customer_email}")
+        print(f"  → User ID: {client_reference_id}")
+        print(f"  → Plan: {plan_type}")
+        print(f"  → Customer ID: {stripe_customer_id}")
+        
+        # Find user in database
+        user_id = None
+        if client_reference_id:
+            user_id = client_reference_id
+        elif customer_email:
+            # Fallback: find user by email
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('SELECT id FROM users WHERE email = ?', (customer_email,))
+                user_row = cursor.fetchone()
+                conn.close()
+                if user_row:
+                    user_id = user_row['id']
+                    print(f"  → Found user by email: ID {user_id}")
+            except Exception as e:
+                print(f"❌ Error finding user by email: {e}")
+        
+        if not user_id:
+            print(f"❌ Cannot find user for payment (email: {customer_email})")
+            return jsonify({'error': 'User not found'}), 400
+        
+        # Update user in database
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            # Determine subscription status based on plan type
+            is_subscription = plan_type in ['subscription', 'premium']
+            subscription_status = 'active' if is_subscription else 'active'
+            
+            cursor.execute('''
+                UPDATE users 
+                SET status = 'active',
+                    stripe_customer_id = ?,
+                    subscription_plan = ?,
+                    subscription_status = ?
+                WHERE id = ?
+            ''', (stripe_customer_id, plan_type, subscription_status, user_id))
+            
+            conn.commit()
+            affected_rows = cursor.rowcount
+            conn.close()
+            
+            if affected_rows > 0:
+                print(f"✅ User {user_id} updated successfully:")
+                print(f"   → Status: active")
+                print(f"   → Plan: {plan_type}")
+                print(f"   → Subscription status: {subscription_status}")
+                print(f"   → Stripe customer: {stripe_customer_id}")
+            else:
+                print(f"⚠️ No user updated (user_id={user_id} not found)")
+                
+        except Exception as e:
+            print(f"❌ Error updating user after payment: {e}")
+            return jsonify({'error': 'Database update failed'}), 500
+    
+    elif event_type == 'customer.subscription.deleted':
+        # Handle subscription cancellation
+        subscription = event['data']['object']
+        stripe_customer_id = subscription.get('customer')
+        
+        print(f"Subscription cancelled for customer: {stripe_customer_id}")
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users 
+                SET subscription_status = 'cancelled',
+                    subscription_plan = 'free'
+                WHERE stripe_customer_id = ?
+            ''', (stripe_customer_id,))
+            conn.commit()
+            conn.close()
+            print(f"✅ User subscription status updated to cancelled")
+        except Exception as e:
+            print(f"❌ Error updating subscription status: {e}")
+    
+    elif event_type == 'invoice.payment_failed':
+        # Handle failed payment
+        invoice = event['data']['object']
+        stripe_customer_id = invoice.get('customer')
+        
+        print(f"⚠️ Payment failed for customer: {stripe_customer_id}")
+        
+        # Optionally update user status
+        # (you might want to give them a grace period before blocking)
+    
+    else:
+        print(f"ℹ️ Unhandled event type: {event_type}")
+    
+    print(f"{'='*60}\n")
+    
+    return jsonify({'success': True}), 200
+
+
 @app.route('/api/create-presentation', methods=['POST'])
 def create_presentation_api():
     """
     API endpoint to create presentation
+    Now includes payment status verification
     """
     try:
         data = request.json
@@ -1888,13 +2729,107 @@ def create_presentation_api():
         if not topic:
             return jsonify({'error': 'Topic is required'}), 400
         
-        # Normalize slides count to default 10 if out of range
+        # ============================================================================
+        # FREE CREDITS & PAYMENT VERIFICATION
+        # ============================================================================
+        # Order of checks:
+        # 1. Block if user is 'blocked'
+        # 2. Allow if user has free_credits > 0 (no Stripe check needed)
+        # 3. Only check Stripe if free_credits == 0
+        
+        if current_user.is_authenticated:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT status, subscription_plan, subscription_status, free_credits FROM users WHERE id = ?',
+                    (current_user.id,)
+                )
+                user_row = cursor.fetchone()
+                conn.close()
+                
+                if user_row:
+                    # ========================================
+                    # STEP 1: Check if user is blocked
+                    # ========================================
+                    if user_row['status'] == 'blocked':
+                        print(f"⛔ User {current_user.id} is BLOCKED - cannot create presentations")
+                        return jsonify({
+                            'error': 'Account blocked',
+                            'message': 'Your account has been blocked. Please contact support.',
+                            'requires_payment': False
+                        }), 403
+                    
+                    # ========================================
+                    # STEP 2: Handle free_credits (backward compatibility)
+                    # ========================================
+                    free_credits = user_row['free_credits']
+                    
+                    # Backward compatibility: if free_credits is NULL for existing users, initialize to 3
+                    if free_credits is None:
+                        print(f"🔄 User {current_user.id} has NULL free_credits - initializing to 3")
+                        try:
+                            conn = sqlite3.connect(DB_PATH)
+                            cursor = conn.cursor()
+                            cursor.execute('UPDATE users SET free_credits = 3 WHERE id = ?', (current_user.id,))
+                            conn.commit()
+                            conn.close()
+                            free_credits = 3
+                            print(f"   → Initialized free_credits = 3 for user {current_user.id}")
+                        except Exception as e:
+                            print(f"⚠️ Error initializing free_credits: {e}")
+                            free_credits = 0  # Fallback to 0 if update fails
+                    
+                    # ========================================
+                    # STEP 3: Check free credits first (bypass Stripe)
+                    # ========================================
+                    if free_credits > 0:
+                        print(f"🎁 User {current_user.id} using FREE CREDIT ({free_credits} remaining)")
+                        print(f"   → Bypassing Stripe payment verification")
+                        # Will decrement free_credits after successful presentation creation
+                        # Store in session/variable to decrement later
+                        request.using_free_credit = True
+                    
+                    # ========================================
+                    # STEP 4: Only check Stripe if NO free credits
+                    # ========================================
+                    else:
+                        print(f"💳 User {current_user.id} has 0 free credits - checking Stripe subscription")
+                        subscription_status = user_row['subscription_status'] or 'inactive'
+                        subscription_plan = user_row['subscription_plan'] or 'free'
+                        
+                        # Allow if: subscription_status='active' OR subscription_plan != 'free'
+                        has_valid_subscription = (subscription_status == 'active') or (subscription_plan != 'free')
+                        
+                        if not has_valid_subscription:
+                            print(f"⛔ User {current_user.id} requires payment:")
+                            print(f"   → Plan: {subscription_plan}")
+                            print(f"   → Status: {subscription_status}")
+                            print(f"   → Free credits: {free_credits}")
+                            return jsonify({
+                                'error': 'Payment required',
+                                'message': 'You have used all 3 free presentations. Please upgrade your plan to continue.',
+                                'requires_payment': True,
+                                'current_plan': subscription_plan,
+                                'free_credits_remaining': 0
+                            }), 403
+                        
+                        print(f"✅ User {current_user.id} has valid subscription - plan: {subscription_plan}, status: {subscription_status}")
+                        request.using_free_credit = False
+                        
+            except Exception as e:
+                print(f"⚠️ Error checking user payment status: {e}")
+                # Continue anyway for backward compatibility
+                request.using_free_credit = False
+        
+        # Normalize slides count to 5-10 range (enforced for 3 types)
         try:
             num_slides = int(num_slides)
         except (ValueError, TypeError):
-            num_slides = 10
-        if num_slides < 3 or num_slides > 10:
-            num_slides = 10
+            num_slides = 7  # Default to middle of range
+        if num_slides < 5 or num_slides > 10:
+            num_slides = max(5, min(10, num_slides))  # Clamp to 5-10
         
         # Check API keys
         if not OPENAI_API_KEY:
@@ -1917,12 +2852,12 @@ def create_presentation_api():
         # Ensure we have the right number of slides
         slides_data = slides_data[:num_slides]
         
-        # Create presentation with the selected theme
-        print("Creating presentation with theme:", theme)
-        filepath = create_presentation(topic, slides_data, theme)
+        # Create presentation with the selected theme and presentation type
+        print("Creating presentation with theme:", theme, "type:", presentation_type)
+        filepath = create_presentation(topic, slides_data, theme, presentation_type)
         filename = os.path.basename(filepath)
         
-        # Save presentation to database if user is authenticated
+        # Save presentation to database if user is authenticated (already verified above)
         if current_user.is_authenticated:
             try:
                 conn = sqlite3.connect(DB_PATH)
@@ -1933,8 +2868,28 @@ def create_presentation_api():
                     (current_user.id, topic, num_slides, filename, presentation_type)
                 )
                 conn.commit()
-                conn.close()
                 print(f"✅ Presentation saved to database for user {current_user.id}")
+                
+                # ========================================
+                # DECREMENT FREE CREDITS if used
+                # ========================================
+                if hasattr(request, 'using_free_credit') and request.using_free_credit:
+                    cursor.execute(
+                        'UPDATE users SET free_credits = free_credits - 1 WHERE id = ?',
+                        (current_user.id,)
+                    )
+                    conn.commit()
+                    
+                    # Get updated credits count
+                    cursor.execute('SELECT free_credits FROM users WHERE id = ?', (current_user.id,))
+                    updated_row = cursor.fetchone()
+                    credits_remaining = updated_row[0] if updated_row else 0
+                    
+                    print(f"🎁 FREE CREDIT USED - User {current_user.id} now has {credits_remaining} free presentations remaining")
+                    if credits_remaining == 0:
+                        print(f"   ⚠️ User has exhausted free credits - next presentation will require payment")
+                
+                conn.close()
             except Exception as e:
                 print(f"⚠️ Error saving presentation to database: {e}")
         
@@ -2242,6 +3197,22 @@ def user_dashboard():
     if hasattr(current_user, 'is_admin_user') and current_user.is_admin_user:
         return redirect(url_for('admin_dashboard'))
     
+    # Verify user status (prevent blocked users from accessing dashboard)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT status FROM users WHERE id = ?', (current_user.id,))
+        user_row = cursor.fetchone()
+        conn.close()
+        
+        if user_row and user_row['status'] == 'blocked':
+            logout_user()
+            flash('❌ Your account has been blocked. Please contact support.', 'error')
+            return redirect(url_for('index'))
+    except Exception as e:
+        print(f"Error checking user status: {e}")
+    
     # Get search, filter and pagination parameters
     search_query = request.args.get('search', '').strip()
     filter_type = request.args.get('type', '').strip()  # Filter by presentation type
@@ -2284,12 +3255,10 @@ def user_dashboard():
                 pres['presentation_type'] = 'business'  # Default for old presentations
             pres['type_info'] = get_presentation_type_info(pres['presentation_type'])
         
-        # Get user data
+        # Get user data (fixed: was calling fetchone() twice, causing user_data to always be None)
         cursor.execute('SELECT * FROM users WHERE id = ?', (current_user.id,))
-        user_data = dict(cursor.fetchone()) if cursor.fetchone() else None
-        
-        cursor.execute('SELECT * FROM users WHERE id = ?', (current_user.id,))
-        user_data = dict(cursor.fetchone())
+        user_row = cursor.fetchone()
+        user_data = dict(user_row) if user_row else None
         
         conn.close()
     except Exception as e:
@@ -2466,12 +3435,42 @@ def admin_logout():
 
 # Application entry point - MUST BE AT THE END OF FILE
 if __name__ == '__main__':
-    print("Starting Presentation Service...")
-    print(f"OpenAI API Key configured: {bool(OPENAI_API_KEY)}")
-    print(f"Pexels API Key configured: {bool(PEXELS_API_KEY)}")
-    print(f"LibreTranslate enabled: {LIBRETRANSLATE_ENABLED}")
-    print(f"LibreTranslate URL: {LIBRETRANSLATE_URL}")
-    print(f"LibreTranslate reachable: {is_libretranslate_available()}")
+    print("\n" + "="*60)
+    print("  🎨 AI SlideRush - Presentation Service")
+    print("="*60)
+    
+    # Environment Check
+    print("\n🔧 CONFIGURATION CHECK:")
+    print(f"   OpenAI API Key: {'✅ Configured' if OPENAI_API_KEY else '❌ Missing'}")
+    
+    # Image Provider Configuration
+    print("\n🖼️ IMAGE PROVIDERS:")
+    print(f"   Mode: {IMAGE_PROVIDER_MODE.upper()}")
+    print(f"   Pexels API: {'✅ Configured' if PEXELS_API_KEY else '⚠️ Missing'}")
+    print(f"   Unsplash API: {'✅ Configured' if UNSPLASH_ACCESS_KEY else '⚠️ Not configured (optional)'}")
+    
+    if IMAGE_PROVIDER_MODE == 'mixed':
+        print("   Strategy: Pexels → Unsplash fallback")
+    elif IMAGE_PROVIDER_MODE == 'pexels':
+        print("   Strategy: Pexels only")
+    elif IMAGE_PROVIDER_MODE == 'unsplash':
+        print("   Strategy: Unsplash only")
+    
+    # LibreTranslate
+    print("\n🌍 LIBRETRANSLATE:")
+    print(f"   Enabled: {LIBRETRANSLATE_ENABLED}")
+    if LIBRETRANSLATE_ENABLED:
+        print(f"   URL: {LIBRETRANSLATE_URL}")
+        print(f"   Reachable: {is_libretranslate_available()}")
+    
+    # Server Start
     port = int(os.environ.get("PORT", 5000))
-    print(f"Starting on port: {port}")
+    print("\n🚀 STARTING SERVER:")
+    print(f"   Port: {port}")
+    print(f"   URL: http://localhost:{port}")
+    print(f"   Debug Mode: True")
+    print("\n" + "="*60)
+    print("🎉 Server is ready! Press CTRL+C to stop.")
+    print("="*60 + "\n")
+    
     app.run(debug=True, host='0.0.0.0', port=port)

@@ -203,6 +203,35 @@
             padding-top: 20px;
             border-top: 1px solid #e1e1e1;
         }
+        
+        .btn-google {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 14px;
+            background: white;
+            color: #333;
+            border: 2px solid #e1e1e1;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        
+        .btn-google:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102,126,234,0.2);
+        }
+        
+        .btn-google.disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>

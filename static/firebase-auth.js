@@ -3,12 +3,12 @@
 
 // TODO: Replace with your Firebase config from Firebase Console
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyDnRZ_aFl8FotFa3QzW2SwBft__Hhzihz4",
+    authDomain: "sliderush-13d84.firebaseapp.com",
+    projectId: "sliderush-13d84",
+    storageBucket: "sliderush-13d84sliderush-13d84.firebasestorage.app",
+    messagingSenderId: "512491560328",
+    appId: "1:512491560328:web:794617bcc34d801d77ae3d"
 };
 
 // Check if Firebase config is set

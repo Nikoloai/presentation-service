@@ -137,17 +137,27 @@ def pick_best_image_for_slide(
     # Sort by similarity (descending)
     scored_candidates.sort(key=lambda x: x['similarity'], reverse=True)
     
+    # Print top 3 candidates for debugging
+    print(f"\n  🏆 Top 3 candidates:")
+    for i, item in enumerate(scored_candidates[:3]):
+        source = item['candidate'].get('source', 'Unknown')
+        print(f"     [{i+1}] {item['description'][:35]:35s} → {item['similarity']:.3f} ({source})")
+    
     # Get best candidate
     best = scored_candidates[0]
     
     # Check if it meets threshold
     if best['similarity'] < similarity_threshold:
-        print(f"  ❌ Best match ({best['similarity']:.3f}) below threshold ({similarity_threshold:.3f})")
+        print(f"\n  ❌ Best match ({best['similarity']:.3f}) below threshold ({similarity_threshold:.3f})")
         return None
     
-    print(f"  ✅ Best match: '{best['description']}' (similarity: {best['similarity']:.3f})")
+    print(f"\n  ✅ Best match: '{best['description']}' (similarity: {best['similarity']:.3f})")
     
-    return best['candidate']
+    # Add similarity score to returned candidate for logging
+    result = best['candidate'].copy()
+    result['_clip_similarity'] = f"{best['similarity']:.3f}"
+    
+    return result
 
 
 def rank_images_by_relevance(

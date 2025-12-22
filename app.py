@@ -25,13 +25,13 @@ import stripe  # Stripe payment integration
 try:
     from services.clip_client import is_clip_available, get_text_embedding
     from services.image_matcher import pick_best_image_for_slide as clip_pick_best_image
-    CLIP_ENABLED = True
-    print("📦 CLIP services imported successfully")
+    CLIP_IMPORT_SUCCESS = True
 except ImportError as e:
-    print(f"⚠️ CLIP services not available: {e}")
+    print(f"⚠️ CLIP services import failed: {e}")
     print("   → Install dependencies: pip install torch sentence-transformers")
-    CLIP_ENABLED = False
+    CLIP_IMPORT_SUCCESS = False
     clip_pick_best_image = None
+    is_clip_available = lambda: False
 
 TRANSLATION_CACHE = {}
 CYRILLIC_RE = re.compile('[а-яА-Я]')
@@ -42,6 +42,176 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
+
+# ============================================================================
+# CLIP CONFIGURATION
+# ============================================================================
+# Read CLIP configuration from environment
+CLIP_ENABLED = os.getenv('CLIP_ENABLED', 'true').lower() in ('true', '1', 'yes')
+CLIP_SIMILARITY_THRESHOLD = float(os.getenv('CLIP_SIMILARITY_THRESHOLD', '0.30'))
+CLIP_MIN_CANDIDATES = int(os.getenv('CLIP_MIN_CANDIDATES', '8'))
+CLIP_MAX_CANDIDATES = int(os.getenv('CLIP_MAX_CANDIDATES', '20'))
+
+print("\n" + "="*70)
+print("🤖 CLIP CONFIGURATION")
+print("="*70)
+print(f"CLIP_ENABLED (from env): {CLIP_ENABLED}")
+print(f"CLIP_SIMILARITY_THRESHOLD: {CLIP_SIMILARITY_THRESHOLD}")
+print(f"CLIP_MIN_CANDIDATES: {CLIP_MIN_CANDIDATES}")
+print(f"CLIP_MAX_CANDIDATES: {CLIP_MAX_CANDIDATES}")
+
+# Attempt to initialize CLIP if enabled
+CLIP_AVAILABLE = False
+if CLIP_ENABLED:
+    if not CLIP_IMPORT_SUCCESS:
+        print("❌ CLIP enabled but import failed - dependencies not installed")
+        print("   → Falling back to keyword search only")
+        CLIP_AVAILABLE = False
+    else:
+        print("🔄 Attempting CLIP initialization...")
+        try:
+            # Test CLIP availability (will trigger model download if needed)
+            if is_clip_available():
+                # Get model info
+                try:
+                    from services import clip_client
+                    model = clip_client._clip_model
+                    if model:
+                        import torch
+                        device = next(model.parameters()).device if hasattr(model, 'parameters') else 'unknown'
+                        emb_dim = model.get_sentence_embedding_dimension() if hasattr(model, 'get_sentence_embedding_dimension') else 'unknown'
+                        print(f"✅ CLIP initialized successfully")
+                        print(f"   → Model: clip-ViT-B-32")
+                        print(f"   → Device: {device}")
+                        print(f"   → Embedding dimension: {emb_dim}")
+                        CLIP_AVAILABLE = True
+                    else:
+                        print("⚠️ CLIP model loaded but not accessible")
+                        CLIP_AVAILABLE = False
+                except Exception as e:
+                    print(f"⚠️ Could not get CLIP model details: {e}")
+                    CLIP_AVAILABLE = True  # Still mark as available if basic check passed
+            else:
+                print("❌ CLIP initialization failed - model not available")
+                print("   → Falling back to keyword search only")
+                CLIP_AVAILABLE = False
+        except Exception as e:
+            print(f"❌ CLIP initialization failed: {e}")
+            print(f"   → Error type: {type(e).__name__}")
+            print("   → Falling back to keyword search only")
+            CLIP_AVAILABLE = False
+else:
+    print("⚠️ CLIP disabled via CLIP_ENABLED=false")
+    print("   → Using keyword search only")
+    CLIP_AVAILABLE = False
+
+print(f"\n🎯 Final CLIP status: {'ACTIVE' if CLIP_AVAILABLE else 'INACTIVE'}")
+print("="*70 + "\n")
+
+# ============================================================================
+# TRANSLATION CONFIGURATION (Universal Layer)
+# ============================================================================
+# Universal translation layer for image search queries
+# Supports multiple providers and can be enabled/disabled independently
+
+# Main toggle for translation
+TRANSLATION_ENABLED = os.getenv('TRANSLATION_ENABLED', 'false').lower() in ('true', '1', 'yes')
+
+# Translation provider: 'none', 'libre', 'external'
+TRANSLATION_PROVIDER = os.getenv('TRANSLATION_PROVIDER', 'none').lower()
+
+# Target language for image searches (usually 'en' for better stock photo results)
+TRANSLATION_TARGET_LANG = os.getenv('TRANSLATION_TARGET_LANG', 'en')
+
+# LibreTranslate configuration (used when TRANSLATION_PROVIDER='libre')
+LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL', 'http://localhost:5001')
+LIBRETRANSLATE_TIMEOUT = int(os.getenv('LIBRETRANSLATE_TIMEOUT', '10'))
+
+# External translation service configuration (used when TRANSLATION_PROVIDER='external')
+EXTERNAL_TRANSLATE_URL = os.getenv('EXTERNAL_TRANSLATE_URL', '')
+EXTERNAL_TRANSLATE_API_KEY = os.getenv('EXTERNAL_TRANSLATE_API_KEY', '')
+EXTERNAL_TRANSLATE_TIMEOUT = float(os.getenv('EXTERNAL_TRANSLATE_TIMEOUT', '5.0'))
+
+print("="*70)
+print("🌐 TRANSLATION CONFIGURATION (Image Search)")
+print("="*70)
+print(f"TRANSLATION_ENABLED: {TRANSLATION_ENABLED}")
+print(f"TRANSLATION_PROVIDER: {TRANSLATION_PROVIDER}")
+print(f"TRANSLATION_TARGET_LANG: {TRANSLATION_TARGET_LANG}")
+
+if not TRANSLATION_ENABLED:
+    print("⚠️ Translation DISABLED for image search")
+    print("   → Using original text for all image queries")
+    print("   → Relying on CLIP semantic matching + multilingual photo stocks")
+elif TRANSLATION_PROVIDER == 'none':
+    print("ℹ️ Translation enabled but provider set to 'none'")
+    print("   → No actual translation will occur")
+    print("   → Using original text (same as TRANSLATION_ENABLED=false)")
+elif TRANSLATION_PROVIDER == 'libre':
+    print(f"✅ Translation provider: LibreTranslate")
+    print(f"   → LibreTranslate URL: {LIBRETRANSLATE_URL}")
+    print(f"   → Target language: {TRANSLATION_TARGET_LANG}")
+    print("   → Note: Ensure LibreTranslate service is running")
+elif TRANSLATION_PROVIDER == 'external':
+    if EXTERNAL_TRANSLATE_URL:
+        print(f"✅ Translation provider: External API")
+        print(f"   → External URL: {EXTERNAL_TRANSLATE_URL}")
+        print(f"   → Target language: {TRANSLATION_TARGET_LANG}")
+        print(f"   → Timeout: {EXTERNAL_TRANSLATE_TIMEOUT}s")
+    else:
+        print("⚠️ Translation provider set to 'external' but EXTERNAL_TRANSLATE_URL not configured")
+        print("   → Falling back to original text")
+else:
+    print(f"⚠️ Unknown translation provider: '{TRANSLATION_PROVIDER}'")
+    print("   → Valid values: none, libre, external")
+    print("   → Falling back to original text")
+
+print("="*70 + "\n")
+
+# ============================================================================
+# IMAGE SEARCH MODE CONFIGURATION
+# ============================================================================
+# Control image search behavior: legacy (stable) vs advanced (experimental)
+
+# USE_IMAGE_PROMPT: Whether to use LLM-generated image_prompt field
+# - false (default): Legacy mode - ignores image_prompt, uses search_keyword/title/content
+# - true: Advanced mode - uses image_prompt for better search queries
+USE_IMAGE_PROMPT = os.getenv('USE_IMAGE_PROMPT', 'false').lower() in ('true', '1', 'yes')
+
+# USE_STRICT_CLIP_FILTER: Whether CLIP should block images below threshold
+# - false (default): Soft mode - CLIP only ranks, always picks best candidate
+# - true: Strict mode - CLIP rejects images below CLIP_SIMILARITY_THRESHOLD
+USE_STRICT_CLIP_FILTER = os.getenv('USE_STRICT_CLIP_FILTER', 'false').lower() in ('true', '1', 'yes')
+
+print("="*70)
+print("🖼️  IMAGE SEARCH MODE")
+print("="*70)
+print(f"USE_IMAGE_PROMPT: {USE_IMAGE_PROMPT}")
+print(f"USE_STRICT_CLIP_FILTER: {USE_STRICT_CLIP_FILTER}")
+
+if not USE_IMAGE_PROMPT and not USE_STRICT_CLIP_FILTER:
+    print("📌 Mode: LEGACY (stable, production-ready)")
+    print("   → Uses search_keyword/title/content for queries")
+    print("   → CLIP only ranks candidates (no threshold blocking)")
+    print("   → Maximum stability across RU/EN languages")
+elif USE_IMAGE_PROMPT and not USE_STRICT_CLIP_FILTER:
+    print("📌 Mode: ADVANCED with soft CLIP")
+    print("   → Uses image_prompt when available")
+    print("   → CLIP ranks but doesn't block images")
+    print("   → Better quality with legacy fallback")
+elif not USE_IMAGE_PROMPT and USE_STRICT_CLIP_FILTER:
+    print("📌 Mode: LEGACY with strict CLIP")
+    print("   → Uses search_keyword/title/content")
+    print("   → CLIP can reject images below threshold")
+    print("   → May skip images if relevance is low")
+else:  # Both enabled
+    print("📌 Mode: ADVANCED (experimental)")
+    print("   → Uses image_prompt for queries")
+    print("   → CLIP strictly filters by threshold")
+    print("   → Best quality but may fail more often")
+    print("   → Recommended only after thorough testing")
+
+print("="*70 + "\n")
 
 # ============================================================================
 # DEVELOPMENT MODE CONFIGURATION
@@ -418,9 +588,6 @@ def delete_user(user_id):
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY')
 UNSPLASH_ACCESS_KEY = os.getenv('UNSPLASH_ACCESS_KEY')  # Added Unsplash support
-LIBRETRANSLATE_ENABLED = os.getenv('LIBRETRANSLATE_ENABLED', 'false').lower() in ('1', 'true', 'yes')
-LIBRETRANSLATE_URL = os.getenv('LIBRETRANSLATE_URL', 'http://localhost:5001')
-LIBRETRANSLATE_TIMEOUT = int(os.getenv('LIBRETRANSLATE_TIMEOUT', '10'))
 
 # ============================================================================
 # IMAGE PROVIDER CONFIGURATION
@@ -841,49 +1008,243 @@ def is_admin():
     return current_user.is_authenticated and hasattr(current_user, 'is_admin_user') and current_user.is_admin_user
 
 
-def translate_keyword_to_english(keyword, topic):
+# ============================================================================
+# UNIVERSAL TRANSLATION LAYER FOR IMAGE SEARCH
+# ============================================================================
+
+def external_translate(text: str, target_lang: str = 'en', source_lang: str = None) -> str:
     """
-    Translate/optimize keyword to concise English for Pexels using LibreTranslate (if enabled).
-    Returns a 2-4 word English phrase. Uses in-memory cache.
+    Translate text using external HTTP API service.
+    
+    Universal template for external translation services (Google Translate API, DeepL, etc.)
+    
+    Args:
+        text: Text to translate
+        target_lang: Target language code (default: 'en')
+        source_lang: Source language code (auto-detect if None)
+    
+    Returns:
+        Translated text or original text if translation fails
+    
+    Configuration:
+        EXTERNAL_TRANSLATE_URL: API endpoint
+        EXTERNAL_TRANSLATE_API_KEY: API key (if required)
+        EXTERNAL_TRANSLATE_TIMEOUT: Request timeout
     """
+    if not EXTERNAL_TRANSLATE_URL:
+        print(f"  ⚠️ External translation URL not configured, using original text")
+        return text
+    
     try:
-        if not keyword:
-            return ''
-        key = f"{topic}|{keyword}".lower()
-        if key in TRANSLATION_CACHE:
-            print(f"  🌐 LibreTranslate: '{keyword}' → '{TRANSLATION_CACHE[key]}' (from cache)")
-            return TRANSLATION_CACHE[key]
-        
-        # If not enabled or keyword already English, return original
-        if not LIBRETRANSLATE_ENABLED or not CYRILLIC_RE.search(keyword):
-            return keyword
+        # Universal request template - adapt based on your provider
+        # Example for Google Translate API, LibreTranslate, or similar
+        headers = {}
+        if EXTERNAL_TRANSLATE_API_KEY:
+            headers['Authorization'] = f'Bearer {EXTERNAL_TRANSLATE_API_KEY}'
+            # Or: headers['X-API-Key'] = EXTERNAL_TRANSLATE_API_KEY
         
         payload = {
-            'q': keyword,
-            'source': 'ru',
-            'target': 'en'
+            'q': text,
+            'target': target_lang,
         }
-        print(f"  🌐 LibreTranslate request: '{keyword}' → en at {LIBRETRANSLATE_URL}")
-        resp = requests.post(f"{LIBRETRANSLATE_URL}/translate", json=payload, timeout=LIBRETRANSLATE_TIMEOUT)
-        if resp.status_code == 200:
-            data = resp.json()
+        
+        if source_lang:
+            payload['source'] = source_lang
+        
+        print(f"  🌐 External translation: '{text[:40]}...' → {target_lang}")
+        
+        response = requests.post(
+            EXTERNAL_TRANSLATE_URL,
+            json=payload,
+            headers=headers,
+            timeout=EXTERNAL_TRANSLATE_TIMEOUT
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            # Adapt this based on response structure
+            translated = data.get('translatedText') or data.get('translation') or data.get('text', '')
+            translated = translated.strip()
+            
+            if translated:
+                print(f"  ✅ External translation: '{text[:30]}' → '{translated[:30]}'")
+                return translated
+            else:
+                print(f"  ⚠️ Empty translation response, using original")
+                return text
+        else:
+            print(f"  ⚠️ External translation error {response.status_code}: {response.text[:100]}")
+            return text
+            
+    except requests.exceptions.Timeout:
+        print(f"  ⚠️ External translation timeout ({EXTERNAL_TRANSLATE_TIMEOUT}s), using original text")
+        return text
+    except requests.exceptions.ConnectionError as e:
+        print(f"  ⚠️ External translation connection error: {e}")
+        print(f"     Using original text")
+        return text
+    except Exception as e:
+        print(f"  ⚠️ External translation exception: {e}")
+        print(f"     Using original text")
+        return text
+
+
+def libre_translate(text: str, target_lang: str = 'en', source_lang: str = 'ru') -> str:
+    """
+    Translate text using LibreTranslate service.
+    
+    Args:
+        text: Text to translate
+        target_lang: Target language code (default: 'en')
+        source_lang: Source language code (default: 'ru')
+    
+    Returns:
+        Translated text or original text if translation fails
+    """
+    if not LIBRETRANSLATE_URL:
+        print(f"  ⚠️ LibreTranslate URL not configured, using original text")
+        return text
+    
+    try:
+        payload = {
+            'q': text,
+            'source': source_lang,
+            'target': target_lang
+        }
+        
+        print(f"  🌐 LibreTranslate: '{text[:40]}...' → {target_lang} at {LIBRETRANSLATE_URL}")
+        
+        response = requests.post(
+            f"{LIBRETRANSLATE_URL}/translate",
+            json=payload,
+            timeout=LIBRETRANSLATE_TIMEOUT
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
             translated = data.get('translatedText', '').strip()
             # Sanitize minimal
             translated = re.sub(r'[^a-zA-Z\s]', '', translated)
             translated = ' '.join(translated.split())
+            
             if translated:
-                TRANSLATION_CACHE[key] = translated
-                print(f"  ✓ LibreTranslate: '{keyword}' → '{translated}'")
+                print(f"  ✅ LibreTranslate: '{text[:30]}' → '{translated[:30]}'")
                 return translated
             else:
-                print("  ⚠ LibreTranslate returned empty translation, using original")
-                return keyword
+                print(f"  ⚠️ LibreTranslate returned empty, using original")
+                return text
         else:
-            print(f"  ⚠ LibreTranslate error {resp.status_code}: {resp.text[:120]}... Using original")
-            return keyword
+            print(f"  ⚠️ LibreTranslate error {response.status_code}: {response.text[:100]}")
+            return text
+            
+    except requests.exceptions.Timeout:
+        print(f"  ⚠️ LibreTranslate timeout ({LIBRETRANSLATE_TIMEOUT}s), using original text")
+        return text
+    except requests.exceptions.ConnectionError as e:
+        print(f"  ⚠️ LibreTranslate connection error (service unavailable)")
+        print(f"     Error: {e}")
+        print(f"     Using original text")
+        return text
     except Exception as e:
-        print(f"  ⚠ LibreTranslate exception: {e}. Using original")
-        return keyword
+        print(f"  ⚠️ LibreTranslate exception: {e}")
+        print(f"     Using original text")
+        return text
+
+
+def translate_for_image_search(text: str, source_lang: str = None, context: str = '') -> str:
+    """
+    Universal translation function for image search queries.
+    
+    This is the main entry point for all image search translations.
+    Routes to appropriate provider based on configuration.
+    
+    Args:
+        text: Text to translate (search query, keywords, etc.)
+        source_lang: Source language code (auto-detected if None)
+        context: Additional context (e.g., topic) for logging
+    
+    Returns:
+        Translated text (or original if translation disabled/failed)
+    
+    Configuration:
+        TRANSLATION_ENABLED: Master toggle
+        TRANSLATION_PROVIDER: 'none', 'libre', 'external'
+        TRANSLATION_TARGET_LANG: Target language (usually 'en')
+    
+    Examples:
+        >>> translate_for_image_search("рост доходов")  # With CLIP: returns original
+        >>> translate_for_image_search("рост доходов", source_lang='ru')  # Translates if enabled
+    """
+    if not text or not text.strip():
+        return ''
+    
+    text = text.strip()
+    
+    # Auto-detect language if not specified
+    if source_lang is None:
+        source_lang = 'ru' if CYRILLIC_RE.search(text) else 'en'
+    
+    # Log context for debugging
+    context_str = f" (context: {context})" if context else ""
+    print(f"\n  🌐 Image search language: {source_lang}{context_str}")
+    
+    # Check if translation is disabled
+    if not TRANSLATION_ENABLED:
+        print(f"  ⚠️ Translation disabled (TRANSLATION_ENABLED=false)")
+        print(f"     Using original query: '{text[:50]}...'")
+        return text
+    
+    # Check if already in target language
+    if source_lang == TRANSLATION_TARGET_LANG:
+        print(f"  ℹ️ Text already in target language ({TRANSLATION_TARGET_LANG})")
+        print(f"     Skipping translation: '{text[:50]}...'")
+        return text
+    
+    # Check cache first
+    cache_key = f"{context}|{text}".lower()
+    if cache_key in TRANSLATION_CACHE:
+        cached = TRANSLATION_CACHE[cache_key]
+        print(f"  💾 From cache: '{text[:30]}' → '{cached[:30]}'")
+        return cached
+    
+    print(f"  🌐 Translation: ENABLED, provider={TRANSLATION_PROVIDER}, target={TRANSLATION_TARGET_LANG}")
+    
+    # Route to appropriate provider
+    translated = text  # Default to original
+    
+    if TRANSLATION_PROVIDER == 'none':
+        print(f"  ℹ️ Provider set to 'none' - no translation")
+        print(f"     Using original: '{text[:50]}...'")
+        translated = text
+        
+    elif TRANSLATION_PROVIDER == 'libre':
+        translated = libre_translate(text, TRANSLATION_TARGET_LANG, source_lang)
+        
+    elif TRANSLATION_PROVIDER == 'external':
+        translated = external_translate(text, TRANSLATION_TARGET_LANG, source_lang)
+        
+    else:
+        print(f"  ⚠️ Unknown provider '{TRANSLATION_PROVIDER}'")
+        print(f"     Valid: 'none', 'libre', 'external'")
+        print(f"     Using original: '{text[:50]}...'")
+        translated = text
+    
+    # Cache the result
+    if translated and translated != text:
+        TRANSLATION_CACHE[cache_key] = translated
+    
+    return translated
+
+
+# DEPRECATED: Legacy function for backward compatibility
+def translate_keyword_to_english(keyword, topic=''):
+    """
+    DEPRECATED: Use translate_for_image_search() instead.
+    
+    Legacy wrapper for backward compatibility with existing code.
+    Routes to new universal translation layer.
+    """
+    return translate_for_image_search(keyword, context=topic)
 
 
 def detect_language(text):
@@ -1168,21 +1529,25 @@ def generate_slide_content_in_language(topic, num_slides, language='en', present
     {{
       "title": "Проблема гиподиагностики",
       "search_keyword": "veterinary diagnostics rare disease animals",
+      "image_prompt": "veterinarian examining sick exotic pet in modern diagnostic clinic",
       "content": "Согласно исследованию Dr. Sarah Mitchell (Cornell University, 2022), только 12% редких заболеваний у домашних животных диагностируются при жизни. Основная причина — отсутствие у ветеринаров опыта распознавания атипичных симптомов. В случае синдрома Кушинга у хорьков средний срок до постановки диагноза составляет 8.3 месяца, что критично при средней продолжительности жизни 6-8 лет."
     }},
     {{
       "title": "Архитектура CNN для патологий",
       "search_keyword": "convolutional neural network medical imaging",
+      "image_prompt": "medical imaging neural network analyzing microscopy pathology slides",
       "content": "Команда из UC Davis разработала сверточную сеть ResNet-152, обученную на 47,000 гистопатологических изображений экзотических животных. Точность детекции лимфомы у попугаев достигла 94.7%, превысив показатели опытных патологоанатомов (89.2%). Критический момент: сеть выявляет паттерны, невидимые человеческому глазу — анизоцитоз на уровне 3-5 микрон."
     }},
     {{
       "title": "Дилемма малых выборок",
       "search_keyword": "few shot learning medical AI",
+      "image_prompt": "small dataset machine learning training process visualization",
       "content": "Для болезни фон Виллебранда у доберманов существует только 340 задокументированных случаев с подтвержденной биопсией. Техника few-shot learning с метрическими пространствами (Prototypical Networks) позволила достичь 78% точности при обучении всего на 15 примерах. Однако возникает риск переобучения: модель может запомнить артефакты конкретных клиник, а не истинные паттерны болезни."
     }},
     {{
       "title": "Открытые вызовы",
       "search_keyword": "AI challenges veterinary medicine future",
+      "image_prompt": "diverse veterinary professionals discussing AI technology challenges",
       "content": "Три нерешенных вопроса тормозят внедрение: 1) Отсутствие стандартизации протоколов сбора данных между клиниками (89% баз данных несовместимы); 2) Этическая дилемма — кто несет ответственность при ошибке AI в диагнозе?; 3) Феномен 'distribution shift' — модели, обученные на данных из США, показывают падение точности на 23-31% при тестировании на азиатских породах. Требуются федеративные подходы к обучению."
     }}
   ]
@@ -1193,6 +1558,13 @@ def generate_slide_content_in_language(topic, num_slides, language='en', present
 
 ПРАВИЛЬНО (конкретика и глубина):
 "Алгоритм YOLO-v5, адаптированный группой Prof. Chen для рентгенограмм рептилий, обнаруживает метаболическую болезнь костей у игуан с чувствительностью 91.3% — на 34% выше, чем средний показатель герпетологов-практиков."
+
+КРИТИЧЕСКИ ВАЖНО - СТРУКТУРА ОТВЕТА:
+Для каждого слайда ОБЯЗАТЕЛЬНО верни:
+- "title" - заголовок слайда
+- "search_keyword" - ключевые слова для поиска картинок НА АНГЛИЙСКОМ (3-5 слов)
+- "content" - содержимое слайда
+- "image_prompt" - (ОПЦИОНАЛЬНО) подробное описание идеального изображения на АНГЛИЙСКОМ (5-12 слов)
 
 ФОРМАТ ОТВЕТА:
 Верни ТОЛЬКО валидный JSON в формате:
@@ -1394,21 +1766,25 @@ EXAMPLE OF DEEP CONTENT for "Neural networks for diagnosing rare animal diseases
     {{
       "title": "Underdiagnosis Problem",
       "search_keyword": "veterinary diagnostics rare disease animals",
+      "image_prompt": "veterinarian examining sick exotic pet in modern diagnostic clinic",
       "content": "According to Dr. Sarah Mitchell's study (Cornell University, 2022), only 12% of rare diseases in domestic animals are diagnosed during lifetime. Primary cause: veterinarians lack experience recognizing atypical symptoms. For Cushing's syndrome in ferrets, average time to diagnosis is 8.3 months, critical given 6-8 year lifespan."
     }},
     {{
       "title": "CNN Architecture for Pathology",
       "search_keyword": "convolutional neural network medical imaging",
+      "image_prompt": "medical imaging neural network analyzing microscopy pathology slides",
       "content": "UC Davis team developed ResNet-152 convolutional network trained on 47,000 histopathological images of exotic animals. Lymphoma detection accuracy in parrots reached 94.7%, exceeding experienced pathologists (89.2%). Critical: network detects patterns invisible to human eye — anisocytosis at 3-5 micron level."
     }},
     {{
       "title": "Few-Shot Learning Dilemma",
       "search_keyword": "few shot learning medical AI",
+      "image_prompt": "small dataset machine learning training process visualization",
       "content": "Only 340 documented biopsy-confirmed cases exist for von Willebrand disease in Dobermans. Few-shot learning with metric spaces (Prototypical Networks) achieved 78% accuracy training on just 15 examples. However, overfitting risk emerges: model may memorize artifacts of specific clinics rather than true disease patterns."
     }},
     {{
       "title": "Open Challenges",
       "search_keyword": "AI challenges veterinary medicine future",
+      "image_prompt": "diverse veterinary professionals discussing AI technology challenges",
       "content": "Three unsolved issues hamper adoption: 1) Lack of standardized data collection protocols between clinics (89% databases incompatible); 2) Ethical dilemma — who bears responsibility for AI diagnostic errors?; 3) Distribution shift phenomenon — models trained on US data show 23-31% accuracy drop when tested on Asian breeds. Federated learning approaches required."
     }}
   ]
@@ -1419,6 +1795,13 @@ INCORRECT (templates and generic phrases):
 
 CORRECT (specificity and depth):
 "YOLO-v5 algorithm adapted by Prof. Chen's group for reptile X-rays detects metabolic bone disease in iguanas with 91.3% sensitivity — 34% higher than average herpetologist practitioners."
+
+CRITICAL - RESPONSE STRUCTURE:
+For each slide you MUST return:
+- "title" - slide title
+- "search_keyword" - keywords for image search IN ENGLISH (3-5 words)
+- "content" - slide content
+- "image_prompt" - (OPTIONAL) detailed description of ideal image in ENGLISH (5-12 words)
 
 RESPONSE FORMAT:
 Return ONLY valid JSON in format:
@@ -2114,12 +2497,13 @@ def search_image_with_fallback(search_keyword, slide_title, main_topic, used_ima
 
 def search_image_for_slide(slide_title, slide_content, main_topic, exclude_images=None, presentation_type='business'):
     """
-    SMART IMAGE SEARCH FOR SPECIFIC SLIDE CONTENT (WITH CLIP SUPPORT)
+    MAIN ROUTING FUNCTION FOR IMAGE SEARCH
     
-    Analyzes slide title and content to generate optimal search query,
-    ensures no duplicate images are used.
+    Routes to either LEGACY or ADVANCED mode based on USE_IMAGE_PROMPT flag.
+    This maintains backward compatibility while allowing opt-in to new features.
     
-    NEW: Uses CLIP semantic matching when available for better relevance.
+    - LEGACY mode (USE_IMAGE_PROMPT=false, default): Stable, simple keyword search
+    - ADVANCED mode (USE_IMAGE_PROMPT=true): Uses image_prompt and enhanced pipeline
     
     Args:
         slide_title: Title of the slide
@@ -2131,16 +2515,308 @@ def search_image_for_slide(slide_title, slide_content, main_topic, exclude_image
     Returns:
         (image_data, image_url, query_used) or (None, None, None)
     """
+    # Route based on USE_IMAGE_PROMPT flag
+    if not USE_IMAGE_PROMPT:
+        # LEGACY MODE: Ignore image_prompt, use search_keyword/title/content
+        print(f"\n🏷️  MODE: LEGACY (USE_IMAGE_PROMPT=false)")
+        return search_image_legacy_mode(
+            slide_title=slide_title,
+            slide_content=slide_content,
+            main_topic=main_topic,
+            exclude_images=exclude_images,
+            presentation_type=presentation_type,
+            search_keyword=None,  # Will be extracted from content
+            language=None         # Will be auto-detected
+        )
+    else:
+        # ADVANCED MODE: Use image_prompt if available
+        print(f"\n🏷️  MODE: ADVANCED (USE_IMAGE_PROMPT=true)")
+        return search_image_advanced_mode(
+            slide_title=slide_title,
+            slide_content=slide_content,
+            main_topic=main_topic,
+            exclude_images=exclude_images,
+            presentation_type=presentation_type,
+            image_prompt=None,  # Not available in this old signature
+            language=None       # Will be auto-detected
+        )
+
+
+def search_image_in_curated_pool(clip_context_embedding, top_k: int = 5):
+    """
+    Search for images in curated pool using CLIP embeddings.
+    
+    STUB: Future implementation will use FAISS/vector database with pre-indexed curated images.
+    
+    Args:
+        clip_context_embedding: CLIP embedding of slide context (numpy array)
+        top_k: Number of top results to return
+    
+    Returns:
+        List of image candidates (empty for now - stub implementation)
+    
+    Future:
+        - Will maintain a curated pool of high-quality stock photos
+        - Pre-computed CLIP embeddings stored in FAISS index
+        - Fast vector similarity search
+        - Metadata: tags, categories, license info
+    """
+    # STUB: Return empty list until curated pool is implemented
+    return []
+
+
+def search_image_legacy_mode(
+    slide_title: str,
+    slide_content: str,
+    main_topic: str,
+    exclude_images: list | None = None,
+    presentation_type: str = 'business',
+    search_keyword: str | None = None,
+    language: str | None = None
+):
+    """
+    LEGACY IMAGE SEARCH MODE - Maximum stability, minimal complexity
+    
+    This is the original, stable search behavior that works reliably across
+    Russian and English presentations. It uses simple keyword-based search
+    with optional CLIP ranking (soft mode - no threshold blocking).
+    
+    Key characteristics:
+    - Uses search_keyword from LLM (or extracts from title/content)
+    - Ignores image_prompt completely
+    - CLIP only ranks candidates, never blocks images
+    - Simple translation logic (if enabled)
+    - Maximum compatibility and stability
+    
+    Args:
+        slide_title: Title of the slide
+        slide_content: Main content/text of the slide  
+        main_topic: Overall presentation topic
+        exclude_images: List of image URLs to exclude (previously used)
+        presentation_type: Type of presentation (business/scientific/general)
+        search_keyword: LLM-provided search keyword (preferred)
+        language: Language of the slide content (auto-detected if None)
+    
+    Returns:
+        (image_data, image_url, query_used) or (None, None, None)
+    """
     if exclude_images is None:
         exclude_images = []
     
-    print(f"\n🔍 Searching image for slide: '{slide_title}'")
+    print(f"\n🔍 [LEGACY] Searching image for slide: '{slide_title}'")
     
-    # Extract keywords from slide title and content
-    # Combine title + first 100 chars of content for keyword extraction
-    text_for_analysis = f"{slide_title} {slide_content[:100]}"
+    # ========================================================================
+    # STEP 1: Build search query from search_keyword or title/content
+    # ========================================================================
+    if search_keyword and search_keyword.strip():
+        query = search_keyword.strip()
+        print(f"  🎯 [LEGACY] Using search_keyword: '{query}'")
+    else:
+        # Extract keywords from title and content (old behavior)
+        print(f"  ⚠️ [LEGACY] No search_keyword, extracting from title/content")
+        
+        text_for_query = f"{slide_title} {slide_content[:100]}"
+        
+        # Simple keyword extraction
+        stopwords = {
+            'the', 'is', 'at', 'which', 'on', 'a', 'an', 'as', 'are', 'was', 'were',
+            'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'should', 'could', 'may', 'might', 'must',
+            'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they',
+            'это', 'этот', 'эта', 'эти', 'тот', 'та', 'те', 'и', 'в', 'на', 'по', 'с', 'у',
+            'был', 'была', 'были', 'будет', 'будут', 'может', 'можно'
+        }
+        
+        words = re.findall(r'\b\w{4,}\b', text_for_query.lower())
+        keywords = [w for w in words if w not in stopwords][:5]
+        
+        if keywords:
+            query = ' '.join(keywords[:3])  # Top 3 keywords
+            print(f"  🎯 [LEGACY] Extracted keywords: {keywords[:3]}")
+        else:
+            query = slide_title
+            print(f"  ⚠️ [LEGACY] No keywords, using title")
     
-    # Remove common words and extract meaningful terms
+    # Auto-detect language if needed
+    if language is None:
+        language = detect_language(f"{slide_title} {slide_content[:50]}")
+    
+    print(f"  🌍 [LEGACY] Detected language: {language}")
+    
+    # ========================================================================
+    # STEP 2: Apply translation if enabled
+    # ========================================================================
+    # Use universal translation layer
+    query = translate_for_image_search(
+        text=query,
+        source_lang=language,
+        context=f"legacy_search:{slide_title}"
+    )
+    
+    print(f"  🔍 [LEGACY] Final search query: '{query}'")
+    
+    # ========================================================================
+    # STEP 3: CLIP-enhanced search (SOFT MODE - no threshold blocking)
+    # ========================================================================
+    if CLIP_AVAILABLE:
+        print(f"  🤖 [LEGACY] CLIP ranking: STRICT_FILTER={USE_STRICT_CLIP_FILTER}")
+        
+        # Fetch candidates
+        candidate_count = min(CLIP_MAX_CANDIDATES, max(CLIP_MIN_CANDIDATES, 15))
+        candidates = get_images(query, count=candidate_count)
+        
+        if not candidates:
+            print(f"  ⚠️ [LEGACY] No candidates for '{query}', trying title")
+            candidates = get_images(slide_title, count=candidate_count)
+        
+        # Check minimum candidates threshold
+        if candidates and len(candidates) < CLIP_MIN_CANDIDATES:
+            print(f"  ⚠️ [LEGACY] Only {len(candidates)} candidates (< {CLIP_MIN_CANDIDATES} minimum)")
+            print(f"     Skipping CLIP, using keyword search")
+            candidates = []
+        
+        if candidates:
+            print(f"  📊 [LEGACY] Found {len(candidates)} candidates, applying CLIP ranking...")
+            
+            # Build CLIP context (simple - no image_prompt)
+            clip_context_text = f"{slide_title}. {slide_content[:60]}"
+            print(f"  📋 [LEGACY] CLIP context: '{clip_context_text}...'")
+            
+            # Add description field if missing
+            for candidate in candidates:
+                if 'description' not in candidate:
+                    candidate['description'] = (
+                        candidate.get('attribution', '') or 
+                        candidate.get('author', '') or 
+                        slide_title
+                    )
+            
+            # Use CLIP to rank images
+            try:
+                best_image = clip_pick_best_image(
+                    slide_title=slide_title,
+                    slide_content=slide_content,
+                    image_candidates=candidates,
+                    exclude_images=exclude_images,
+                    similarity_threshold=CLIP_SIMILARITY_THRESHOLD if USE_STRICT_CLIP_FILTER else 0.0
+                )
+                
+                if best_image:
+                    similarity = best_image.get('_clip_similarity', 'N/A')
+                    source = best_image.get('source', 'Unknown')
+                    
+                    # In legacy mode, check if strict filter rejected image
+                    if USE_STRICT_CLIP_FILTER and similarity != 'N/A' and similarity < CLIP_SIMILARITY_THRESHOLD:
+                        print(f"  ❌ [LEGACY] CLIP rejected (similarity {similarity} < {CLIP_SIMILARITY_THRESHOLD})")
+                        best_image = None
+                    else:
+                        image_url = best_image['url']
+                        image_data = download_image(image_url)
+                        
+                        if image_data:
+                            print(f"  ✅ [LEGACY] CLIP selected: {image_url[:50]}... (similarity={similarity}, source={source})")
+                            return image_data, image_url, query
+                        else:
+                            print(f"  ⚠️ [LEGACY] Failed to download CLIP-selected image")
+                else:
+                    if USE_STRICT_CLIP_FILTER:
+                        print(f"  ❌ [LEGACY] No image passed CLIP threshold ({CLIP_SIMILARITY_THRESHOLD})")
+                    else:
+                        print(f"  ⚠️ [LEGACY] CLIP ranking returned no result")
+            except Exception as e:
+                print(f"  ⚠️ [LEGACY] CLIP ranking failed: {e}")
+        else:
+            print(f"  ⚠️ [LEGACY] No candidates for CLIP ranking")
+    else:
+        # CLIP not available
+        print(f"  ℹ️ [LEGACY] CLIP not available, using keyword search")
+    
+    # ========================================================================
+    # STEP 4: Fallback to traditional keyword search
+    # ========================================================================
+    print(f"  🔍 [LEGACY] Fallback to keyword search")
+    
+    image_data, image_url, metadata = search_image_with_fallback(
+        search_keyword=query,
+        slide_title=slide_title,
+        main_topic=main_topic,
+        used_images=exclude_images,
+        presentation_type=presentation_type,
+        slide_content=slide_content
+    )
+    
+    if image_url:
+        print(f"  ✅ [LEGACY] Found image: {image_url[:60]}...")
+        return image_data, image_url, query
+    else:
+        print(f"  ❌ [LEGACY] No suitable image found")
+        return None, None, None
+
+
+def build_image_search_query(
+    slide_title: str,
+    slide_content: str,
+    image_prompt: str | None = None,
+    language: str | None = None
+) -> str:
+    """
+    Build optimal search query for image search based on available information.
+    
+    Priority:
+    1. Use image_prompt if available (already in English, optimized for stock photos)
+    2. Fall back to slide_title + content keywords
+    3. Apply translation if needed (based on TRANSLATION_ENABLED/PROVIDER)
+    
+    Args:
+        slide_title: Title of the slide
+        slide_content: Content of the slide
+        image_prompt: LLM-generated image description in English (preferred)
+        language: Language of the slide (auto-detected if None)
+    
+    Returns:
+        Search query string optimized for Pexels/Unsplash
+    
+    Examples:
+        >>> build_image_search_query(
+        ...     "Market Analysis",
+        ...     "Our revenue grew...",
+        ...     "business team analyzing financial charts in modern office"
+        ... )
+        "business team analyzing financial charts in modern office"
+        
+        >>> build_image_search_query(
+        ...     "Анализ рынка",
+        ...     "Наши доходы выросли...",
+        ...     None,
+        ...     language='ru'
+        ... )
+        # Returns translated query or original based on TRANSLATION_ENABLED
+    """
+    # ========================================================================
+    # PRIORITY 1: Use image_prompt if available (best option)
+    # ========================================================================
+    if image_prompt and image_prompt.strip():
+        query = image_prompt.strip()
+        print(f"  🖼️ Image prompt: '{query}'")
+        # image_prompt should already be in English, optimized for stock photos
+        # No translation needed
+        return query
+    
+    # ========================================================================
+    # PRIORITY 2: Build query from title + content
+    # ========================================================================
+    print(f"  ⚠️ No image_prompt provided, building from title/content")
+    
+    # Combine title and short content snippet
+    text_for_query = f"{slide_title} {slide_content[:100]}"
+    
+    # Auto-detect language if not specified
+    if language is None:
+        language = detect_language(text_for_query)
+    
+    print(f"  🌐 Detected language: {language}")
+    
+    # Extract keywords (simplified - reuse existing logic)
     stopwords = {
         'the', 'is', 'at', 'which', 'on', 'a', 'an', 'as', 'are', 'was', 'were',
         'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
@@ -2150,43 +2826,140 @@ def search_image_for_slide(slide_title, slide_content, main_topic, exclude_image
         'был', 'была', 'были', 'будет', 'будут', 'может', 'можно'
     }
     
-    # Extract words (4+ characters, not stopwords)
-    words = re.findall(r'\b\w{4,}\b', text_for_analysis.lower())
-    keywords = [w for w in words if w not in stopwords][:5]  # Top 5 keywords
+    words = re.findall(r'\b\w{4,}\b', text_for_query.lower())
+    keywords = [w for w in words if w not in stopwords][:5]
     
     if keywords:
-        # Build search query from keywords
-        search_query = ' '.join(keywords[:3])  # Use top 3 keywords
-        print(f"  🎯 Keywords extracted: {keywords[:3]}")
+        query = ' '.join(keywords[:3])  # Top 3 keywords
+        print(f"  🎯 Extracted keywords: {keywords[:3]}")
     else:
-        # Fallback to slide title
-        search_query = slide_title
-        print(f"  ⚠️ No keywords found, using slide title")
+        query = slide_title
+        print(f"  ⚠️ No keywords extracted, using title")
     
     # ========================================================================
-    # CLIP-ENHANCED IMAGE SEARCH
+    # TRANSLATION: Use universal translation layer
     # ========================================================================
-    # If CLIP is available, fetch multiple candidates and use semantic matching
-    # to pick the best one. Otherwise, fall back to keyword search.
+    # Translate query if:
+    # - TRANSLATION_ENABLED=true
+    # - TRANSLATION_PROVIDER != 'none'
+    # - language is not already target language
     
-    if CLIP_ENABLED and is_clip_available():
-        print(f"  🤖 Using CLIP semantic matching for better relevance")
+    query = translate_for_image_search(
+        text=query,
+        source_lang=language,
+        context=f"image_search:{slide_title}"
+    )
+    
+    print(f"  🔍 Final search query: '{query}'")
+    return query
+
+
+def search_image_advanced_mode(
+    slide_title: str,
+    slide_content: str,
+    main_topic: str,
+    exclude_images: list | None = None,
+    presentation_type: str = 'business',
+    image_prompt: str | None = None,
+    language: str | None = None
+):
+    """
+    ADVANCED IMAGE SEARCH MODE - Uses image_prompt and enhanced pipeline
+    
+    This mode uses the newer, more sophisticated search pipeline with:
+    - image_prompt from LLM for better search queries
+    - Universal translation layer
+    - CLIP semantic matching with configurable threshold filtering
+    - Curated pool support (stub for future)
+    
+    Behavior depends on USE_STRICT_CLIP_FILTER:
+    - false: CLIP ranks but never blocks (soft mode)
+    - true: CLIP can reject images below threshold (strict mode)
+    
+    Args:
+        slide_title: Title of the slide
+        slide_content: Main content/text of the slide
+        main_topic: Overall presentation topic
+        exclude_images: List of image URLs to exclude (previously used)
+        presentation_type: Type of presentation (business/scientific/general)
+        image_prompt: LLM-generated image description in English (NEW)
+        language: Language of the slide content (auto-detected if None)
+    
+    Returns:
+        (image_data, image_url, query_used) or (None, None, None)
+    """
+    if exclude_images is None:
+        exclude_images = []
+    
+    print(f"\n🔍 [ADVANCED] Searching image for slide: '{slide_title}'")
+    print(f"  🔧 [ADVANCED] STRICT_FILTER={USE_STRICT_CLIP_FILTER}")
+    
+    # ========================================================================
+    # NEW: Build search query using image_prompt or fallback
+    # ========================================================================
+    search_query = build_image_search_query(
+        slide_title=slide_title,
+        slide_content=slide_content,
+        image_prompt=image_prompt,
+        language=language
+    )
+    
+    # ========================================================================
+    # FUTURE: Try curated pool first (stub for now)
+    # ========================================================================
+    if CLIP_AVAILABLE and image_prompt:
+        # Get CLIP embedding for slide context
+        try:
+            from services.clip_client import get_text_embedding
+            clip_context = f"{slide_title}. {slide_content[:100]}. {image_prompt or ''}"
+            context_embedding = get_text_embedding(clip_context)
+            
+            # Try curated pool (returns empty list for now - stub)
+            curated_candidates = search_image_in_curated_pool(context_embedding, top_k=5)
+            
+            if curated_candidates:
+                print(f"  🌟 [ADVANCED] Found {len(curated_candidates)} images in curated pool")
+                # TODO: Implement curated pool ranking and selection
+                # For now, falls through to regular search
+        except Exception as e:
+            print(f"  ⚠️ [ADVANCED] Curated pool search failed: {e}")
+    
+    # ========================================================================
+    # CLIP-ENHANCED IMAGE SEARCH (from Pexels/Unsplash)
+    # ========================================================================
+    if CLIP_AVAILABLE:
+        print(f"  🤖 [ADVANCED] Using CLIP semantic matching")
+        print(f"     Threshold: {CLIP_SIMILARITY_THRESHOLD}, Min candidates: {CLIP_MIN_CANDIDATES}")
         
-        # Fetch more candidates for CLIP to choose from (10-15 images)
-        candidate_count = 15
+        # Determine candidate count (configurable range)
+        candidate_count = min(CLIP_MAX_CANDIDATES, max(CLIP_MIN_CANDIDATES, 15))
         
-        # Use existing search with fallback to get candidates
+        # Fetch candidates using the built search query
         candidates = get_images(search_query, count=candidate_count)
         
         if not candidates:
-            print(f"  ⚠️ No candidates found for '{search_query}', trying fallback")
+            print(f"  ⚠️ [ADVANCED] No candidates for '{search_query}', trying title")
             # Try with slide title as fallback
             candidates = get_images(slide_title, count=candidate_count)
         
+        # Check if we have minimum required candidates
+        if candidates and len(candidates) < CLIP_MIN_CANDIDATES:
+            print(f"  ⚠️ [ADVANCED] Only {len(candidates)} candidates (< {CLIP_MIN_CANDIDATES} minimum)")
+            print(f"     Skipping CLIP, falling back to keyword search")
+            candidates = []  # Force fallback
+        
         if candidates:
-            print(f"  📊 Found {len(candidates)} candidates, applying CLIP ranking...")
+            print(f"  📊 [ADVANCED] Found {len(candidates)} candidates, applying CLIP ranking...")
             
-            # Add description field if missing (use attribution or title)
+            # Enhanced CLIP context with image_prompt
+            if image_prompt:
+                clip_context_text = f"{slide_title}. {slide_content[:60]}. Target: {image_prompt}"
+            else:
+                clip_context_text = f"{slide_title}. {slide_content[:60]}"
+            
+            print(f"  📝 CLIP context: '{clip_context_text}...'")
+            
+            # Add description field if missing
             for candidate in candidates:
                 if 'description' not in candidate:
                     candidate['description'] = (
@@ -2196,35 +2969,59 @@ def search_image_for_slide(slide_title, slide_content, main_topic, exclude_image
                     )
             
             # Use CLIP to pick best matching image
-            best_image = clip_pick_best_image(
-                slide_title=slide_title,
-                slide_content=slide_content,
-                image_candidates=candidates,
-                exclude_images=exclude_images,
-                similarity_threshold=0.25  # Configurable threshold
-            )
+            # In soft mode (USE_STRICT_CLIP_FILTER=false), pass threshold=0.0 to never block
+            # In strict mode (USE_STRICT_CLIP_FILTER=true), use actual threshold
+            effective_threshold = CLIP_SIMILARITY_THRESHOLD if USE_STRICT_CLIP_FILTER else 0.0
             
-            if best_image:
-                # Download the selected image
-                image_url = best_image['url']
-                image_data = download_image(image_url)
+            try:
+                best_image = clip_pick_best_image(
+                    slide_title=slide_title,
+                    slide_content=slide_content + (f" Image target: {image_prompt}" if image_prompt else ""),
+                    image_candidates=candidates,
+                    exclude_images=exclude_images,
+                    similarity_threshold=effective_threshold
+                )
                 
-                if image_data:
-                    print(f"  ✅ CLIP selected best match: {image_url[:60]}...")
-                    return image_data, image_url, search_query
+                if best_image:
+                    similarity = best_image.get('_clip_similarity', 'N/A')
+                    source = best_image.get('source', 'Unknown')
+                    
+                    # Check if strict mode rejected the image
+                    if USE_STRICT_CLIP_FILTER and similarity != 'N/A' and similarity < CLIP_SIMILARITY_THRESHOLD:
+                        print(f"  ❌ [ADVANCED] CLIP rejected (similarity {similarity} < {CLIP_SIMILARITY_THRESHOLD})")
+                        print(f"     Reason: Strict filter enabled, threshold not met")
+                    else:
+                        image_url = best_image['url']
+                        image_data = download_image(image_url)
+                        
+                        if image_data:
+                            mode_suffix = "(strict)" if USE_STRICT_CLIP_FILTER else "(soft)"
+                            print(f"  ✅ [ADVANCED] CLIP selected {mode_suffix}: {image_url[:50]}...")
+                            print(f"     similarity={similarity}, source={source}")
+                            return image_data, image_url, search_query
+                        else:
+                            print(f"  ⚠️ [ADVANCED] Failed to download CLIP-selected image")
                 else:
-                    print(f"  ⚠️ Failed to download CLIP-selected image")
-            else:
-                print(f"  ⚠️ CLIP found no suitable match (below threshold or all excluded)")
+                    if USE_STRICT_CLIP_FILTER:
+                        print(f"  ❌ [ADVANCED] No image passed CLIP threshold ({CLIP_SIMILARITY_THRESHOLD})")
+                    else:
+                        print(f"  ⚠️ [ADVANCED] CLIP ranking returned no result")
+            except Exception as e:
+                print(f"  ⚠️ [ADVANCED] CLIP ranking failed: {e}")
         else:
-            print(f"  ⚠️ No image candidates found")
+            print(f"  ⚠️ [ADVANCED] No candidates for CLIP ranking")
+    else:
+        # CLIP not available
+        if CLIP_ENABLED:
+            print(f"  ⚠️ [ADVANCED] CLIP enabled but not available (initialization failed)")
+        else:
+            print(f"  ℹ️ [ADVANCED] CLIP disabled (CLIP_ENABLED=false)")
+        print(f"     Using keyword search only")
     
     # ========================================================================
     # FALLBACK: Traditional keyword-based search
     # ========================================================================
-    # Use if CLIP unavailable or failed to find suitable image
-    
-    print(f"  🔍 Falling back to traditional keyword search")
+    print(f"  🔍 [ADVANCED] Fallback to keyword search")
     
     # Use existing intelligent search with duplicate prevention
     image_data, image_url, metadata = search_image_with_fallback(
@@ -2237,16 +3034,28 @@ def search_image_for_slide(slide_title, slide_content, main_topic, exclude_image
     )
     
     if image_url:
-        print(f"  ✅ Found unique image: {image_url[:60]}...")
+        print(f"  ✅ [ADVANCED] Found image: {image_url[:60]}...")
         return image_data, image_url, search_query
     else:
-        print(f"  ❌ No suitable image found (all options exhausted or duplicates)")
+        print(f"  ❌ [ADVANCED] No suitable image found")
         return None, None, None
 
 
+# Backward compatibility alias
+search_image_for_slide_enhanced = search_image_advanced_mode
+
+
 def is_libretranslate_available():
+    """
+    Check if LibreTranslate service is available.
+    Returns False immediately if translation is disabled or provider is not 'libre'.
+    """
     try:
-        if not LIBRETRANSLATE_ENABLED:
+        if not TRANSLATION_ENABLED:
+            return False
+        if TRANSLATION_PROVIDER != 'libre':
+            return False
+        if not LIBRETRANSLATE_URL:
             return False
         resp = requests.get(f"{LIBRETRANSLATE_URL}/languages", timeout=LIBRETRANSLATE_TIMEOUT)
         return resp.status_code == 200
@@ -2611,14 +3420,33 @@ def create_presentation(topic, slides_data, theme='light', presentation_type='bu
         # Combine within-presentation used images + user history
         all_exclude_images = list(used_images) + exclude_images
         
-        # Use SMART SEARCH: analyzes slide title + content for optimal query
-        image_data, image_url, query_used = search_image_for_slide(
-            slide_title=slide_data['title'],
-            slide_content=slide_data.get('content', ''),
-            main_topic=topic,
-            exclude_images=all_exclude_images,
-            presentation_type=presentation_type
-        )
+        # Extract search_keyword and image_prompt from slide_data (supports both modes)
+        search_keyword = slide_data.get('search_keyword', None)
+        image_prompt = slide_data.get('image_prompt', None)
+        
+        # Route based on USE_IMAGE_PROMPT flag
+        if not USE_IMAGE_PROMPT:
+            # LEGACY MODE: Use search_keyword
+            image_data, image_url, query_used = search_image_legacy_mode(
+                slide_title=slide_data['title'],
+                slide_content=slide_data.get('content', ''),
+                main_topic=topic,
+                exclude_images=all_exclude_images,
+                presentation_type=presentation_type,
+                search_keyword=search_keyword,  # LLM-generated in English
+                language=None  # Auto-detect
+            )
+        else:
+            # ADVANCED MODE: Use image_prompt
+            image_data, image_url, query_used = search_image_advanced_mode(
+                slide_title=slide_data['title'],
+                slide_content=slide_data.get('content', ''),
+                main_topic=topic,
+                exclude_images=all_exclude_images,
+                presentation_type=presentation_type,
+                image_prompt=image_prompt,  # LLM-generated description
+                language=None  # Auto-detect
+            )
         
         if image_data and image_url:
             # Mark image as used in this presentation
@@ -3784,12 +4612,15 @@ if __name__ == '__main__':
     elif IMAGE_PROVIDER_MODE == 'unsplash':
         print("   Strategy: Unsplash only")
     
-    # LibreTranslate
-    print("\n🌍 LIBRETRANSLATE:")
-    print(f"   Enabled: {LIBRETRANSLATE_ENABLED}")
-    if LIBRETRANSLATE_ENABLED:
-        print(f"   URL: {LIBRETRANSLATE_URL}")
+    # LibreTranslate / Translation
+    print("\n🌍 TRANSLATION:")
+    print(f"   Enabled: {TRANSLATION_ENABLED}")
+    print(f"   Provider: {TRANSLATION_PROVIDER}")
+    if TRANSLATION_ENABLED and TRANSLATION_PROVIDER == 'libre':
+        print(f"   LibreTranslate URL: {LIBRETRANSLATE_URL}")
         print(f"   Reachable: {is_libretranslate_available()}")
+    elif TRANSLATION_ENABLED and TRANSLATION_PROVIDER == 'external':
+        print(f"   External URL: {EXTERNAL_TRANSLATE_URL if EXTERNAL_TRANSLATE_URL else 'Not configured'}")
     
     # Server Start
     port = int(os.environ.get("PORT", 5000))

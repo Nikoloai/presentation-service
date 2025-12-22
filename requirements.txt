@@ -8,3 +8,12 @@ python-dotenv==1.0.0
 Werkzeug==3.0.1
 gunicorn==21.2.0
 stripe
+
+# CLIP for semantic image matching
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+sentence-transformers>=2.2.0
+Pillow>=10.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0

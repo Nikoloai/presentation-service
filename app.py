@@ -20,6 +20,19 @@ from dotenv import load_dotenv
 import uuid
 import io
 import stripe  # Stripe payment integration
+
+# CLIP services for semantic image matching
+try:
+    from services.clip_client import is_clip_available, get_text_embedding
+    from services.image_matcher import pick_best_image_for_slide as clip_pick_best_image
+    CLIP_ENABLED = True
+    print("📦 CLIP services imported successfully")
+except ImportError as e:
+    print(f"⚠️ CLIP services not available: {e}")
+    print("   → Install dependencies: pip install torch sentence-transformers")
+    CLIP_ENABLED = False
+    clip_pick_best_image = None
+
 TRANSLATION_CACHE = {}
 CYRILLIC_RE = re.compile('[а-яА-Я]')
 
@@ -29,6 +42,23 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
+
+# ============================================================================
+# DEVELOPMENT MODE CONFIGURATION
+# ============================================================================
+# Toggle payment verification for development/testing
+# Set PAYMENTS_ENABLED=false in .env to disable payment checks
+PAYMENTS_ENABLED = os.getenv('PAYMENTS_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
+if not PAYMENTS_ENABLED:
+    print("⚠️  ========================================")
+    print("⚠️  [DEV MODE] PAYMENTS DISABLED")
+    print("⚠️  All payment checks will be bypassed")
+    print("⚠️  This should ONLY be used for development/testing")
+    print("⚠️  Set PAYMENTS_ENABLED=true for production")
+    print("⚠️  ========================================")
+else:
+    print("✅ Payment verification: ENABLED (production mode)")
 
 # ============================================================================
 # Stripe Configuration
@@ -449,6 +479,27 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
+        
+        # Create table to track used images (prevent duplicates)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS used_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                image_url TEXT NOT NULL,
+                image_query TEXT,
+                used_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # Create index for faster image lookups
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_used_images_user'")
+        if not cursor.fetchone():
+            try:
+                cursor.execute('CREATE INDEX idx_used_images_user ON used_images(user_id, image_url)')
+                print("✅ Migration: Created index on used_images table")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Migration: idx_used_images_user index may already exist - {e}")
         
         # Migration: Add missing columns to users table
         # Safe pattern: check column existence before adding to avoid errors
@@ -1614,6 +1665,107 @@ def can_make_api_call(service):
 # This layer provides a unified interface for fetching images from multiple
 # sources (Pexels, Unsplash) with automatic fallback and error handling
 
+# ============================================================================
+# USED IMAGES TRACKING SYSTEM
+# ============================================================================
+# Prevents duplicate images within presentations and across recent generations
+
+def get_used_images_for_user(user_id, limit=100):
+    """
+    Get list of recently used image URLs for a user
+    
+    Args:
+        user_id: User ID to fetch images for
+        limit: Maximum number of recent images to return (default: 100)
+    
+    Returns:
+        List of image URLs (strings)
+    """
+    if not user_id:
+        return []
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''SELECT image_url FROM used_images 
+               WHERE user_id = ? 
+               ORDER BY used_date DESC 
+               LIMIT ?''',
+            (user_id, limit)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+    except Exception as e:
+        print(f"⚠️ Error fetching used images: {e}")
+        return []
+
+
+def add_used_image(user_id, image_url, query=''):
+    """
+    Add an image to the used images tracking table
+    
+    Args:
+        user_id: User ID who used the image
+        image_url: URL of the image
+        query: Search query used to find the image (optional)
+    """
+    if not user_id or not image_url:
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO used_images (user_id, image_url, image_query)
+               VALUES (?, ?, ?)''',
+            (user_id, image_url, query)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Error adding used image: {e}")
+
+
+def cleanup_old_used_images(user_id, keep_count=100):
+    """
+    Remove old used images beyond the keep_count limit
+    Keeps the database from growing indefinitely
+    
+    Args:
+        user_id: User ID to cleanup
+        keep_count: Number of most recent images to keep (default: 100)
+    """
+    if not user_id:
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Delete all but the most recent keep_count images
+        cursor.execute(
+            '''DELETE FROM used_images 
+               WHERE user_id = ? 
+               AND id NOT IN (
+                   SELECT id FROM used_images 
+                   WHERE user_id = ? 
+                   ORDER BY used_date DESC 
+                   LIMIT ?
+               )''',
+            (user_id, user_id, keep_count)
+        )
+        
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        if deleted_count > 0:
+            print(f"🧹 Cleaned up {deleted_count} old image entries for user {user_id}")
+    except Exception as e:
+        print(f"⚠️ Error cleaning up used images: {e}")
+
 def fetch_images_from_pexels(query, count=1, retries=2):
     """
     Fetch images from Pexels API
@@ -1960,6 +2112,138 @@ def search_image_with_fallback(search_keyword, slide_title, main_topic, used_ima
     return None, None, metadata
 
 
+def search_image_for_slide(slide_title, slide_content, main_topic, exclude_images=None, presentation_type='business'):
+    """
+    SMART IMAGE SEARCH FOR SPECIFIC SLIDE CONTENT (WITH CLIP SUPPORT)
+    
+    Analyzes slide title and content to generate optimal search query,
+    ensures no duplicate images are used.
+    
+    NEW: Uses CLIP semantic matching when available for better relevance.
+    
+    Args:
+        slide_title: Title of the slide
+        slide_content: Main content/text of the slide
+        main_topic: Overall presentation topic
+        exclude_images: List of image URLs to exclude (previously used)
+        presentation_type: Type of presentation (business/scientific/general)
+    
+    Returns:
+        (image_data, image_url, query_used) or (None, None, None)
+    """
+    if exclude_images is None:
+        exclude_images = []
+    
+    print(f"\n🔍 Searching image for slide: '{slide_title}'")
+    
+    # Extract keywords from slide title and content
+    # Combine title + first 100 chars of content for keyword extraction
+    text_for_analysis = f"{slide_title} {slide_content[:100]}"
+    
+    # Remove common words and extract meaningful terms
+    stopwords = {
+        'the', 'is', 'at', 'which', 'on', 'a', 'an', 'as', 'are', 'was', 'were',
+        'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+        'will', 'would', 'should', 'could', 'may', 'might', 'must',
+        'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they',
+        'это', 'этот', 'эта', 'эти', 'тот', 'та', 'те', 'и', 'в', 'на', 'по', 'с', 'у',
+        'был', 'была', 'были', 'будет', 'будут', 'может', 'можно'
+    }
+    
+    # Extract words (4+ characters, not stopwords)
+    words = re.findall(r'\b\w{4,}\b', text_for_analysis.lower())
+    keywords = [w for w in words if w not in stopwords][:5]  # Top 5 keywords
+    
+    if keywords:
+        # Build search query from keywords
+        search_query = ' '.join(keywords[:3])  # Use top 3 keywords
+        print(f"  🎯 Keywords extracted: {keywords[:3]}")
+    else:
+        # Fallback to slide title
+        search_query = slide_title
+        print(f"  ⚠️ No keywords found, using slide title")
+    
+    # ========================================================================
+    # CLIP-ENHANCED IMAGE SEARCH
+    # ========================================================================
+    # If CLIP is available, fetch multiple candidates and use semantic matching
+    # to pick the best one. Otherwise, fall back to keyword search.
+    
+    if CLIP_ENABLED and is_clip_available():
+        print(f"  🤖 Using CLIP semantic matching for better relevance")
+        
+        # Fetch more candidates for CLIP to choose from (10-15 images)
+        candidate_count = 15
+        
+        # Use existing search with fallback to get candidates
+        candidates = get_images(search_query, count=candidate_count)
+        
+        if not candidates:
+            print(f"  ⚠️ No candidates found for '{search_query}', trying fallback")
+            # Try with slide title as fallback
+            candidates = get_images(slide_title, count=candidate_count)
+        
+        if candidates:
+            print(f"  📊 Found {len(candidates)} candidates, applying CLIP ranking...")
+            
+            # Add description field if missing (use attribution or title)
+            for candidate in candidates:
+                if 'description' not in candidate:
+                    candidate['description'] = (
+                        candidate.get('attribution', '') or 
+                        candidate.get('author', '') or 
+                        slide_title
+                    )
+            
+            # Use CLIP to pick best matching image
+            best_image = clip_pick_best_image(
+                slide_title=slide_title,
+                slide_content=slide_content,
+                image_candidates=candidates,
+                exclude_images=exclude_images,
+                similarity_threshold=0.25  # Configurable threshold
+            )
+            
+            if best_image:
+                # Download the selected image
+                image_url = best_image['url']
+                image_data = download_image(image_url)
+                
+                if image_data:
+                    print(f"  ✅ CLIP selected best match: {image_url[:60]}...")
+                    return image_data, image_url, search_query
+                else:
+                    print(f"  ⚠️ Failed to download CLIP-selected image")
+            else:
+                print(f"  ⚠️ CLIP found no suitable match (below threshold or all excluded)")
+        else:
+            print(f"  ⚠️ No image candidates found")
+    
+    # ========================================================================
+    # FALLBACK: Traditional keyword-based search
+    # ========================================================================
+    # Use if CLIP unavailable or failed to find suitable image
+    
+    print(f"  🔍 Falling back to traditional keyword search")
+    
+    # Use existing intelligent search with duplicate prevention
+    image_data, image_url, metadata = search_image_with_fallback(
+        search_keyword=search_query,
+        slide_title=slide_title,
+        main_topic=main_topic,
+        used_images=exclude_images,
+        presentation_type=presentation_type,
+        slide_content=slide_content
+    )
+    
+    if image_url:
+        print(f"  ✅ Found unique image: {image_url[:60]}...")
+        return image_data, image_url, search_query
+    else:
+        print(f"  ❌ No suitable image found (all options exhausted or duplicates)")
+        return None, None, None
+
+
 def is_libretranslate_available():
     try:
         if not LIBRETRANSLATE_ENABLED:
@@ -2196,19 +2480,29 @@ def filter_quiz_and_assessment_slides(slides_data):
     return filtered, removed
 
 
-def create_presentation(topic, slides_data, theme='light', presentation_type='business'):
+def create_presentation(topic, slides_data, theme='light', presentation_type='business', user_id=None):
     """
     Create PowerPoint presentation with text and images.
     Now includes:
     - Quiz/self-assessment slide filtering
-    - Intelligent image search based on content type
+    - Intelligent image search based on SLIDE CONTENT (not just topic)
+    - Duplicate image prevention (within presentation + user history)
     - Dynamic font sizing to prevent text overflow
+    
+    Args:
+        topic: Presentation topic
+        slides_data: List of slide dicts with 'title' and 'content'
+        theme: Visual theme (light/dark)
+        presentation_type: Type (business/scientific/general)
+        user_id: User ID for tracking image usage (optional)
     """
     print(f"\n{'#'*60}")
     print(f"# Creating presentation: {topic}")
     print(f"# Total slides (before filtering): {len(slides_data)}")
     print(f"# Theme: {theme}")
     print(f"# Type: {presentation_type}")
+    if user_id:
+        print(f"# User ID: {user_id}")
     print(f"{'#'*60}\n")
     
     # Filter out quiz/self-assessment slides
@@ -2231,8 +2525,22 @@ def create_presentation(topic, slides_data, theme='light', presentation_type='bu
     prs.slide_width = Inches(10)
     prs.slide_height = Inches(5.625)
     
-    # Track used images to avoid duplicates
-    used_images = set()
+    # ============================================================================
+    # DUPLICATE IMAGE PREVENTION SYSTEM
+    # ============================================================================
+    # Track used images in TWO ways:
+    # 1. Within this presentation (used_images set)
+    # 2. Across user's history (exclude_images from database)
+    
+    used_images = set()  # Images used in this presentation
+    exclude_images = []  # Images to exclude (from user history)
+    
+    if user_id:
+        # Get user's recently used images to avoid duplicates
+        exclude_images = get_used_images_for_user(user_id, limit=100)
+        if exclude_images:
+            print(f"📊 Loaded {len(exclude_images)} previously used images for user {user_id}")
+            print(f"   → Will avoid these in image search to prevent duplicates\n")
     
     for idx, slide_data in enumerate(slides_data):
         # Add a blank slide
@@ -2291,28 +2599,34 @@ def create_presentation(topic, slides_data, theme='light', presentation_type='bu
             except Exception as e:
                 print(f"  ⚠ Failed to add left bar: {e}")
         
-        # Search and add image using intelligent query generation
-        search_term = slide_data.get('search_keyword', slide_data['title'])
+        # ============================================================================
+        # SMART IMAGE SEARCH PER SLIDE
+        # ============================================================================
+        # Uses slide-specific content analysis for better image matching
+        # Prevents duplicates within presentation AND across user history
+        
         print(f"\n[Slide {idx + 1}/{len(slides_data)}] {slide_data['title']}")
         print(f"  Content: {slide_data['content'][:60]}...")
         
-        image_data, image_url, image_metadata = search_image_with_fallback(
-            search_keyword=search_term,
+        # Combine within-presentation used images + user history
+        all_exclude_images = list(used_images) + exclude_images
+        
+        # Use SMART SEARCH: analyzes slide title + content for optimal query
+        image_data, image_url, query_used = search_image_for_slide(
             slide_title=slide_data['title'],
+            slide_content=slide_data.get('content', ''),
             main_topic=topic,
-            used_images=used_images,
-            presentation_type=presentation_type,
-            slide_content=slide_data.get('content', '')
+            exclude_images=all_exclude_images,
+            presentation_type=presentation_type
         )
         
-        # Log intelligent image search results
-        if image_metadata:
-            print(f"  🎨 Image type: {image_metadata.get('category', 'N/A')}")
-            print(f"  🔍 Query: {image_metadata.get('query', 'N/A')}")
-        
         if image_data and image_url:
-            # Mark image as used
+            # Mark image as used in this presentation
             used_images.add(image_url)
+            
+            # Track in database for future duplicate prevention
+            if user_id:
+                add_used_image(user_id, image_url, query_used or slide_data['title'])
             
             try:
                 # Add image on the right side
@@ -2322,11 +2636,11 @@ def create_presentation(topic, slides_data, theme='light', presentation_type='bu
                     width=Inches(4),
                     height=Inches(3.5)
                 )
-                print(f"  ✓ Image added to slide (unique)")
+                print(f"  ✅ Image added successfully (unique, query: '{query_used}')")
             except Exception as e:
                 print(f"  ✗ Error adding image to slide: {e}")
         else:
-            print(f"  ⚠ Continuing without image (no unique image found)")
+            print(f"  ⚠️ Continuing without image (no suitable unique image found)")
         
         # Add content text with improved overflow handling
         content_text = slide_data['content']
@@ -2395,10 +2709,17 @@ def create_presentation(topic, slides_data, theme='light', presentation_type='bu
     filepath = os.path.join(OUTPUT_DIR, filename)
     prs.save(filepath)
     
+    # Cleanup old used images for this user (keep last 100)
+    if user_id:
+        cleanup_old_used_images(user_id, keep_count=100)
+    
     print(f"\n{'#'*60}")
     print(f"# ✓ Presentation created successfully!")
     print(f"# File: {filename}")
     print(f"# Location: {filepath}")
+    print(f"# Unique images used: {len(used_images)}")
+    if user_id:
+        print(f"# Total images tracked for user: {len(exclude_images) + len(used_images)}")
     print(f"{'#'*60}\n")
     
     return filepath
@@ -2733,11 +3054,16 @@ def create_presentation_api():
         # FREE CREDITS & PAYMENT VERIFICATION
         # ============================================================================
         # Order of checks:
-        # 1. Block if user is 'blocked'
-        # 2. Allow if user has free_credits > 0 (no Stripe check needed)
-        # 3. Only check Stripe if free_credits == 0
+        # 1. Check if payments are enabled (dev mode bypass)
+        # 2. Block if user is 'blocked'
+        # 3. Allow if user has free_credits > 0 (no Stripe check needed)
+        # 4. Only check Stripe if free_credits == 0
         
-        if current_user.is_authenticated:
+        # DEV MODE: Skip all payment checks if PAYMENTS_ENABLED=false
+        if not PAYMENTS_ENABLED:
+            print(f"[DEV] ⚠️ Payments disabled, skipping payment check for user {current_user.id if current_user.is_authenticated else 'anonymous'}")
+            request.using_free_credit = False  # Not using credit in dev mode
+        elif current_user.is_authenticated:
             try:
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
@@ -2853,8 +3179,10 @@ def create_presentation_api():
         slides_data = slides_data[:num_slides]
         
         # Create presentation with the selected theme and presentation type
+        # Pass user_id for image duplicate tracking
         print("Creating presentation with theme:", theme, "type:", presentation_type)
-        filepath = create_presentation(topic, slides_data, theme, presentation_type)
+        user_id_for_images = current_user.id if current_user.is_authenticated else None
+        filepath = create_presentation(topic, slides_data, theme, presentation_type, user_id=user_id_for_images)
         filename = os.path.basename(filepath)
         
         # Save presentation to database if user is authenticated (already verified above)

@@ -46,24 +46,49 @@ def is_clip_available() -> bool:
     
     try:
         # Try importing PyTorch CLIP dependencies
+        print("\n" + "="*70)
+        print("🔧 CLIP DIAGNOSTIC - Checking dependencies...")
+        print("="*70)
+        
         import torch
+        print(f"✅ PyTorch version: {torch.__version__}")
+        print(f"   → CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"   → CUDA version: {torch.version.cuda}")
+            print(f"   → GPU device: {torch.cuda.get_device_name(0)}")
+        
         import clip
+        print("✅ CLIP library imported successfully")
         
         # Check if model can be loaded
+        print("\n🔄 Starting CLIP model initialization...")
         _init_clip_model()
         _clip_available = True
-        print("✅ CLIP model available and initialized")
+        print("\n✅ CLIP model available and ready")
+        print("="*70 + "\n")
         return True
         
     except ImportError as e:
-        print(f"⚠️ CLIP dependencies not installed: {e}")
-        print("   → Install with: pip install torch torchvision ftfy regex tqdm")
-        print("   → Install CLIP: pip install git+https://github.com/openai/CLIP.git")
+        print("\n❌ CLIP DIAGNOSTIC - Import Error")
+        print("="*70)
+        print(f"Error: {e}")
+        print("\nRequired dependencies:")
+        print("   → pip install torch torchvision")
+        print("   → pip install ftfy regex tqdm")
+        print("   → pip install git+https://github.com/openai/CLIP.git")
+        print("="*70 + "\n")
         _clip_available = False
         return False
         
     except Exception as e:
-        print(f"⚠️ CLIP model initialization failed: {e}")
+        print("\n❌ CLIP DIAGNOSTIC - Initialization Failed")
+        print("="*70)
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {e}")
+        import traceback
+        print("\nFull traceback:")
+        traceback.print_exc()
+        print("="*70 + "\n")
         _clip_available = False
         return False
 
@@ -81,36 +106,45 @@ def _init_clip_model():
     global _clip_model, _clip_preprocess, _device
     
     if _clip_model is not None:
+        print("⚡ CLIP model already loaded (using cached instance)")
         return _clip_model
     
     try:
         import torch
         import clip
         
-        print("🔄 Loading CLIP model (this may take a minute on first run)...")
+        print("🔄 Loading CLIP model ViT-B/32...")
+        print("   (First run may download ~350MB model file)")
         start_time = time.perf_counter()
         
         # Detect device (CUDA if available)
         _device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"   → Target device: {_device.upper()}")
         
         # Load CLIP model
         _clip_model, _clip_preprocess = clip.load("ViT-B/32", device=_device)
-        _clip_model.eval()  # Set to evaluation mode
+        _clip_model.eval()  # Set to evaluation mode (disables dropout, etc.)
         
         load_time = time.perf_counter() - start_time
         
-        print(f"✅ CLIP model loaded successfully ({load_time:.2f}s)")
-        print(f"   → Model: ViT-B/32")
-        print(f"   → Device: {_device.upper()}")
-        print(f"   → Embedding dimension: 512")
+        print(f"\n✅ CLIP model loaded successfully!")
+        print(f"   ⏱️  Load time: {load_time:.2f}s")
+        print(f"   🧠 Model: ViT-B/32")
+        print(f"   💻 Device: {_device.upper()}")
+        print(f"   📊 Embedding dimension: 512")
         
         # Load image embedding cache from disk
+        print("\n🗄️  Loading image embedding cache...")
         _load_image_cache()
         
         return _clip_model
         
     except Exception as e:
-        print(f"❌ Failed to load CLIP model: {e}")
+        print(f"\n❌ CRITICAL ERROR: Failed to load CLIP model")
+        print(f"   Error: {e}")
+        import traceback
+        print("\n📋 Full traceback:")
+        traceback.print_exc()
         raise
 
 

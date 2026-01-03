@@ -63,6 +63,7 @@ def pick_best_image_for_slide(
     total_start = time.perf_counter()
     
     if not image_candidates:
+        print("  ⚠️ No image candidates provided")
         return None
     
     if exclude_images is None:
@@ -80,13 +81,15 @@ def pick_best_image_for_slide(
     
     # If CLIP not available, fall back to first valid candidate
     if not is_clip_available():
-        print("  ⚠️ CLIP unavailable, using fallback (first candidate)")
+        print("  ❌ CLIP unavailable, using fallback (first candidate)")
         return candidates[0]
     
     # Combine slide context for semantic matching
     slide_context = f"{slide_title}. {slide_content[:200]}"  # Limit content length
     
-    print(f"  🤖 CLIP semantic matching for: '{slide_title}'")
+    print(f"\n  🤖 CLIP MATCHING: '{slide_title[:50]}'")
+    print(f"     📋 Candidates: {len(candidates)} images")
+    print(f"     🎯 Threshold: {similarity_threshold:.3f}")
     
     # STEP 1: Get embedding for slide context (LRU cached)
     step1_start = time.perf_counter()
@@ -97,7 +100,7 @@ def pick_best_image_for_slide(
         print("  ⚠️ Failed to get context embedding, using fallback")
         return candidates[0]
     
-    print(f"     ⏱️  Context embedding: {step1_time:.1f}ms")
+    print(f"\n     ⏱️  Step 1 - Context embedding: {step1_time:.1f}ms")
     
     # STEP 2: Get text descriptions for all candidates
     step2_start = time.perf_counter()
@@ -122,7 +125,7 @@ def pick_best_image_for_slide(
             desc_embeddings.append(np.zeros(512))
     
     step2_time = (time.perf_counter() - step2_start) * 1000
-    print(f"     ⏱️  Description embeddings ({len(candidates)} items): {step2_time:.1f}ms")
+    print(f"     ⏱️  Step 2 - Description embeddings ({len(candidates)} items): {step2_time:.1f}ms")
     
     # STEP 3: Compute similarities (vectorized)
     step3_start = time.perf_counter()
@@ -140,7 +143,7 @@ def pick_best_image_for_slide(
         print(f"     [{idx+1}] {desc[:35]:35s} → {similarity:.3f}")
     
     step3_time = (time.perf_counter() - step3_start) * 1000
-    print(f"     ⏱️  Similarity computation: {step3_time:.1f}ms")
+    print(f"     ⏱️  Step 3 - Similarity computation: {step3_time:.1f}ms")
     
     if not scored_candidates:
         print("  ❌ No candidates could be scored")
@@ -164,8 +167,9 @@ def pick_best_image_for_slide(
         return None
     
     total_time = (time.perf_counter() - total_start) * 1000
-    print(f"\n  ✅ Best match: '{best['description']}' (similarity: {best['similarity']:.3f})")
-    print(f"  ⏱️  Total CLIP matching time: {total_time:.1f}ms")
+    print(f"\n  ✅ BEST MATCH: '{best['description'][:40]}' (similarity: {best['similarity']:.3f})")
+    print(f"  ⏱️  TOTAL CLIP TIME: {total_time:.1f}ms ({total_time/1000:.2f}s)")
+    print(f"     → Breakdown: context={step1_time:.0f}ms + desc={step2_time:.0f}ms + sim={step3_time:.0f}ms")
     
     # Add similarity score to returned candidate for logging
     result = best['candidate'].copy()

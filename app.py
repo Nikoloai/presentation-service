@@ -4,6 +4,7 @@ import requests
 import re
 import hashlib
 import sqlite3
+import time
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, session
 from flask_cors import CORS
@@ -68,44 +69,40 @@ if CLIP_ENABLED:
         print("   → Falling back to keyword search only")
         CLIP_AVAILABLE = False
     else:
-        print("🔄 Attempting CLIP initialization...")
+        print("🔄 FORCING CLIP initialization at startup...")
+        print("   (This ensures CLIP is ready before processing requests)\n")
         try:
-            # Test CLIP availability (will trigger model download if needed)
-            if is_clip_available():
-                # Get model info
-                try:
-                    from services import clip_client
-                    model = clip_client._clip_model
-                    if model:
-                        import torch
-                        device = next(model.parameters()).device if hasattr(model, 'parameters') else 'unknown'
-                        emb_dim = model.get_sentence_embedding_dimension() if hasattr(model, 'get_sentence_embedding_dimension') else 'unknown'
-                        print(f"✅ CLIP initialized successfully")
-                        print(f"   → Model: clip-ViT-B-32")
-                        print(f"   → Device: {device}")
-                        print(f"   → Embedding dimension: {emb_dim}")
-                        CLIP_AVAILABLE = True
-                    else:
-                        print("⚠️ CLIP model loaded but not accessible")
-                        CLIP_AVAILABLE = False
-                except Exception as e:
-                    print(f"⚠️ Could not get CLIP model details: {e}")
-                    CLIP_AVAILABLE = True  # Still mark as available if basic check passed
+            # FORCE initialization at startup (not lazy loading)
+            init_start = time.perf_counter()
+            clip_ready = is_clip_available()
+            init_time = time.perf_counter() - init_start
+            
+            if clip_ready:
+                CLIP_AVAILABLE = True
+                print(f"\n✅ CLIP READY in {init_time:.2f}s - All systems operational")
             else:
-                print("❌ CLIP initialization failed - model not available")
+                print(f"\n❌ CLIP initialization failed after {init_time:.2f}s")
+                print("   → Check logs above for detailed error information")
                 print("   → Falling back to keyword search only")
                 CLIP_AVAILABLE = False
+                
         except Exception as e:
-            print(f"❌ CLIP initialization failed: {e}")
-            print(f"   → Error type: {type(e).__name__}")
-            print("   → Falling back to keyword search only")
+            print(f"\n❌ CLIP STARTUP FAILED")
+            print("="*70)
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {e}")
+            import traceback
+            print("\n📋 Full traceback:")
+            traceback.print_exc()
+            print("="*70)
+            print("\n   → Falling back to keyword search only")
             CLIP_AVAILABLE = False
 else:
     print("⚠️ CLIP disabled via CLIP_ENABLED=false")
     print("   → Using keyword search only")
     CLIP_AVAILABLE = False
 
-print(f"\n🎯 Final CLIP status: {'ACTIVE' if CLIP_AVAILABLE else 'INACTIVE'}")
+print(f"\n🎯 Final CLIP status: {'\u2705 ACTIVE' if CLIP_AVAILABLE else '❌ INACTIVE'}")
 print("="*70 + "\n")
 
 # ============================================================================
@@ -2676,7 +2673,11 @@ def search_image_legacy_mode(
             candidates = []
         
         if candidates:
-            print(f"  📊 [LEGACY] Found {len(candidates)} candidates, applying CLIP ranking...")
+            print(f"  📊 [LEGACY] Found {len(candidates)} candidates, starting CLIP ranking...")
+            print(f"     → CLIP Mode: {'STRICT (can reject)' if USE_STRICT_CLIP_FILTER else 'SOFT (ranks only)'}")
+            print(f"     → Threshold: {CLIP_SIMILARITY_THRESHOLD if USE_STRICT_CLIP_FILTER else 0.0}")
+            
+            clip_start = time.perf_counter()
             
             # Build CLIP context (simple - no image_prompt)
             clip_context_text = f"{slide_title}. {slide_content[:60]}"
@@ -2700,6 +2701,9 @@ def search_image_legacy_mode(
                     exclude_images=exclude_images,
                     similarity_threshold=CLIP_SIMILARITY_THRESHOLD if USE_STRICT_CLIP_FILTER else 0.0
                 )
+                
+                clip_time = time.perf_counter() - clip_start
+                print(f"  ⏱️  [LEGACY] CLIP processing completed in {clip_time:.2f}s")
                 
                 if best_image:
                     similarity = best_image.get('_clip_similarity', 'N/A')
@@ -4107,48 +4111,73 @@ def get_presentation_types():
 @app.route('/api/test-clip', methods=['GET'])
 def test_clip():
     """
-    Test endpoint for CLIP performance optimization.
+    🧪 EMERGENCY DIAGNOSTIC: Test endpoint for CLIP performance.
     Tests image search with CLIP matching for a given text query.
-    Target: <5 seconds response time.
+    
+    TARGET: <5 seconds response time for single query
+    GOAL: <60 seconds for full presentation (10-15 slides)
     
     Query params:
-        text: Search text (default: "Machine Learning")
+        text: Search text (default: "banana plantain")
     
     Returns:
-        JSON with timing information and performance metrics
+        JSON with comprehensive timing and diagnostic information
     """
-    import time
     
     # Get query parameter
-    text_query = request.args.get('text', 'Machine Learning')
+    text_query = request.args.get('text', 'banana plantain')
     
     print(f"\n{'='*70}")
-    print(f"🧪 CLIP PERFORMANCE TEST")
+    print(f"🧪 CLIP PERFORMANCE TEST - EMERGENCY DIAGNOSTIC")
     print(f"{'='*70}")
-    print(f"Query: '{text_query}'")
+    print(f"🔍 Query: '{text_query}'")
+    print(f"🎯 Target: <5 seconds for single test")
     
     overall_start = time.perf_counter()
     
     try:
-        # STEP 1: Check CLIP availability
+        # DIAGNOSTIC 1: Check CLIP status
+        print(f"\n🔧 STEP 1: CLIP Status Check")
         step1_start = time.perf_counter()
+        
+        print(f"   → CLIP_ENABLED: {CLIP_ENABLED}")
+        print(f"   → CLIP_AVAILABLE: {CLIP_AVAILABLE}")
+        print(f"   → CLIP_IMPORT_SUCCESS: {CLIP_IMPORT_SUCCESS}")
+        
         if not CLIP_AVAILABLE:
+            error_msg = "CLIP NOT AVAILABLE - Check startup logs for errors"
+            print(f"\n❌ {error_msg}")
             return jsonify({
                 'success': False,
-                'error': 'CLIP not available',
-                'elapsed_ms': (time.perf_counter() - overall_start) * 1000
+                'error': error_msg,
+                'elapsed_ms': (time.perf_counter() - overall_start) * 1000,
+                'diagnostics': {
+                    'clip_enabled': CLIP_ENABLED,
+                    'clip_available': CLIP_AVAILABLE,
+                    'clip_import_success': CLIP_IMPORT_SUCCESS
+                }
             }), 503
-        step1_time = (time.perf_counter() - step1_start) * 1000
         
-        # STEP 2: Fetch image candidates (max 6)
+        step1_time = (time.perf_counter() - step1_start) * 1000
+        print(f"   ✅ CLIP is available and ready")
+        print(f"   ⏱️  Time: {step1_time:.1f}ms")
+        
+        # DIAGNOSTIC 2: Fetch image candidates
+        print(f"\n📸 STEP 2: Fetching Image Candidates (max 6)")
         step2_start = time.perf_counter()
+        
         candidates = get_images(text_query, count=6)
+        
         step2_time = (time.perf_counter() - step2_start) * 1000
+        print(f"   → Found: {len(candidates) if candidates else 0} images")
+        print(f"   ⏱️  Time: {step2_time:.1f}ms")
         
         if not candidates:
+            error_msg = f"No image candidates found for query: '{text_query}'"
+            print(f"\n❌ {error_msg}")
             return jsonify({
                 'success': False,
-                'error': 'No image candidates found',
+                'error': error_msg,
                 'elapsed_ms': (time.perf_counter() - overall_start) * 1000,
                 'timing': {
                     'clip_check_ms': step1_time,
@@ -4156,19 +4185,26 @@ def test_clip():
                 }
             }), 404
         
-        # STEP 3: Prepare candidates for CLIP
+        # DIAGNOSTIC 3: Prepare candidates for CLIP
+        print(f"\n🛠️  STEP 3: Preparing Candidates")
         step3_start = time.perf_counter()
-        for candidate in candidates:
+        
+        for i, candidate in enumerate(candidates):
             if 'description' not in candidate:
                 candidate['description'] = (
                     candidate.get('attribution', '') or 
                     candidate.get('author', '') or 
                     text_query
                 )
-        step3_time = (time.perf_counter() - step3_start) * 1000
+            print(f"   [{i+1}] {candidate.get('description', 'No description')[:40]}")
         
-        # STEP 4: Run CLIP matching
+        step3_time = (time.perf_counter() - step3_start) * 1000
+        print(f"   ⏱️  Time: {step3_time:.1f}ms")
+        
+        # DIAGNOSTIC 4: Run CLIP matching (THE CRITICAL STEP)
+        print(f"\n🤖 STEP 4: CLIP SEMANTIC MATCHING (CRITICAL)")
         step4_start = time.perf_counter()
+        
         best_image = clip_pick_best_image(
             slide_title=text_query,
             slide_content=f"Testing CLIP performance for query: {text_query}",
@@ -4176,7 +4212,9 @@ def test_clip():
             exclude_images=[],
             similarity_threshold=0.0  # Soft mode for testing
         )
+        
         step4_time = (time.perf_counter() - step4_start) * 1000
+        print(f"\n   ⏱️  CLIP Time: {step4_time:.1f}ms ({step4_time/1000:.2f}s)")
         
         # Calculate total elapsed time
         total_elapsed = time.perf_counter() - overall_start
@@ -4186,23 +4224,33 @@ def test_clip():
         if total_elapsed < 5.0:
             status = '✅ EXCELLENT'
             performance_level = 'excellent'
+            status_emoji = '🎉'
         elif total_elapsed < 10.0:
             status = '✓ GOOD'
             performance_level = 'good'
+            status_emoji = '👍'
         else:
             status = '⚠️ SLOW'
             performance_level = 'slow'
+            status_emoji = '🐢'
         
         print(f"\n{'='*70}")
-        print(f"⏱️  PERFORMANCE RESULTS: {status}")
+        print(f"{status_emoji} PERFORMANCE RESULTS: {status}")
         print(f"{'='*70}")
-        print(f"Total time: {total_ms:.1f}ms ({total_elapsed:.2f}s)")
-        print(f"Target: <5000ms (5s)")
-        print(f"\nBreakdown:")
-        print(f"  - CLIP check: {step1_time:.1f}ms")
-        print(f"  - Fetch candidates: {step2_time:.1f}ms")
-        print(f"  - Prepare data: {step3_time:.1f}ms")
-        print(f"  - CLIP matching: {step4_time:.1f}ms")
+        print(f"⏱️  Total time: {total_ms:.1f}ms ({total_elapsed:.2f}s)")
+        print(f"🎯 Target: <5000ms (5s)")
+        print(f"{'✅ MEETS TARGET' if total_elapsed < 5.0 else '❌ EXCEEDS TARGET'}")
+        print(f"\n📈 Breakdown:")
+        print(f"   1. CLIP status check:    {step1_time:7.1f}ms")
+        print(f"   2. Fetch candidates:     {step2_time:7.1f}ms")
+        print(f"   3. Prepare data:         {step3_time:7.1f}ms")
+        print(f"   4. CLIP matching:        {step4_time:7.1f}ms  ⭐ CRITICAL")
+        print(f"   {'─'*40}")
+        print(f"   TOTAL:                   {total_ms:7.1f}ms")
+        print(f"\n💡 Estimated full presentation (15 slides):")
+        estimated_full = (total_elapsed * 15)
+        print(f"   {estimated_full:.1f}s ({estimated_full/60:.1f} min)")
+        print(f"   {'✅ Under 60s target' if estimated_full < 60 else '❌ Over 60s target'}")
         print(f"{'='*70}\n")
         
         # Return detailed results
@@ -4211,20 +4259,34 @@ def test_clip():
             'query': text_query,
             'performance': performance_level,
             'status': status,
-            'elapsed_ms': total_ms,
+            'elapsed_ms': round(total_ms, 1),
             'elapsed_sec': round(total_elapsed, 2),
             'target_sec': 5.0,
             'meets_target': total_elapsed < 5.0,
+            'estimated_full_presentation': {
+                'slides': 15,
+                'estimated_sec': round(estimated_full, 1),
+                'estimated_min': round(estimated_full / 60, 2),
+                'meets_60s_target': estimated_full < 60
+            },
             'timing': {
-                'clip_check_ms': round(step1_time, 1),
-                'fetch_candidates_ms': round(step2_time, 1),
-                'prepare_data_ms': round(step3_time, 1),
-                'clip_matching_ms': round(step4_time, 1),
+                'step1_clip_check_ms': round(step1_time, 1),
+                'step2_fetch_candidates_ms': round(step2_time, 1),
+                'step3_prepare_data_ms': round(step3_time, 1),
+                'step4_clip_matching_ms': round(step4_time, 1),
                 'total_ms': round(total_ms, 1)
             },
             'candidates': {
                 'count': len(candidates),
-                'max_allowed': 6
+                'max_allowed': 6,
+                'optimized': True
+            },
+            'diagnostics': {
+                'clip_enabled': CLIP_ENABLED,
+                'clip_available': CLIP_AVAILABLE,
+                'clip_import_success': CLIP_IMPORT_SUCCESS,
+                'use_strict_filter': USE_STRICT_CLIP_FILTER,
+                'similarity_threshold': CLIP_SIMILARITY_THRESHOLD
             }
         }
         
@@ -4232,20 +4294,37 @@ def test_clip():
             result['best_match'] = {
                 'url': best_image.get('url', '')[:100],
                 'similarity': best_image.get('_clip_similarity', 'N/A'),
-                'source': best_image.get('source', 'Unknown')
+                'source': best_image.get('source', 'Unknown'),
+                'description': best_image.get('description', '')[:60]
             }
+            print(f"✅ Best match found: {result['best_match']['description']}")
+            print(f"   Similarity: {result['best_match']['similarity']}")
+        else:
+            print("⚠️ No best match returned (check CLIP logs above)")
         
         return jsonify(result)
         
     except Exception as e:
         total_elapsed = time.perf_counter() - overall_start
-        print(f"\n❌ TEST FAILED: {e}")
+        error_type = type(e).__name__
+        
+        print(f"\n❌ TEST FAILED: {error_type}")
+        print(f"{'='*70}")
+        print(f"Error: {e}")
+        import traceback
+        print("\n📋 Full traceback:")
+        traceback.print_exc()
         print(f"{'='*70}\n")
         
         return jsonify({
             'success': False,
             'error': str(e),
-            'elapsed_ms': total_elapsed * 1000
+            'error_type': error_type,
+            'elapsed_ms': total_elapsed * 1000,
+            'diagnostics': {
+                'clip_enabled': CLIP_ENABLED,
+                'clip_available': CLIP_AVAILABLE
+            }
         }), 500
 
 

@@ -2661,8 +2661,8 @@ def search_image_legacy_mode(
     if CLIP_AVAILABLE:
         print(f"  🤖 [LEGACY] CLIP ranking: STRICT_FILTER={USE_STRICT_CLIP_FILTER}")
         
-        # Fetch candidates
-        candidate_count = min(CLIP_MAX_CANDIDATES, max(CLIP_MIN_CANDIDATES, 15))
+        # Fetch candidates (max 6 for speed optimization)
+        candidate_count = 6
         candidates = get_images(query, count=candidate_count)
         
         if not candidates:
@@ -2931,8 +2931,8 @@ def search_image_advanced_mode(
         print(f"  🤖 [ADVANCED] Using CLIP semantic matching")
         print(f"     Threshold: {CLIP_SIMILARITY_THRESHOLD}, Min candidates: {CLIP_MIN_CANDIDATES}")
         
-        # Determine candidate count (configurable range)
-        candidate_count = min(CLIP_MAX_CANDIDATES, max(CLIP_MIN_CANDIDATES, 15))
+        # Determine candidate count (max 6 for speed optimization)
+        candidate_count = 6
         
         # Fetch candidates using the built search query
         candidates = get_images(search_query, count=candidate_count)
@@ -4102,6 +4102,151 @@ def get_presentation_types():
         'success': True,
         'types': PRESENTATION_TYPES
     })
+
+
+@app.route('/api/test-clip', methods=['GET'])
+def test_clip():
+    """
+    Test endpoint for CLIP performance optimization.
+    Tests image search with CLIP matching for a given text query.
+    Target: <5 seconds response time.
+    
+    Query params:
+        text: Search text (default: "Machine Learning")
+    
+    Returns:
+        JSON with timing information and performance metrics
+    """
+    import time
+    
+    # Get query parameter
+    text_query = request.args.get('text', 'Machine Learning')
+    
+    print(f"\n{'='*70}")
+    print(f"🧪 CLIP PERFORMANCE TEST")
+    print(f"{'='*70}")
+    print(f"Query: '{text_query}'")
+    
+    overall_start = time.perf_counter()
+    
+    try:
+        # STEP 1: Check CLIP availability
+        step1_start = time.perf_counter()
+        if not CLIP_AVAILABLE:
+            return jsonify({
+                'success': False,
+                'error': 'CLIP not available',
+                'elapsed_ms': (time.perf_counter() - overall_start) * 1000
+            }), 503
+        step1_time = (time.perf_counter() - step1_start) * 1000
+        
+        # STEP 2: Fetch image candidates (max 6)
+        step2_start = time.perf_counter()
+        candidates = get_images(text_query, count=6)
+        step2_time = (time.perf_counter() - step2_start) * 1000
+        
+        if not candidates:
+            return jsonify({
+                'success': False,
+                'error': 'No image candidates found',
+                'elapsed_ms': (time.perf_counter() - overall_start) * 1000,
+                'timing': {
+                    'clip_check_ms': step1_time,
+                    'fetch_candidates_ms': step2_time
+                }
+            }), 404
+        
+        # STEP 3: Prepare candidates for CLIP
+        step3_start = time.perf_counter()
+        for candidate in candidates:
+            if 'description' not in candidate:
+                candidate['description'] = (
+                    candidate.get('attribution', '') or 
+                    candidate.get('author', '') or 
+                    text_query
+                )
+        step3_time = (time.perf_counter() - step3_start) * 1000
+        
+        # STEP 4: Run CLIP matching
+        step4_start = time.perf_counter()
+        best_image = clip_pick_best_image(
+            slide_title=text_query,
+            slide_content=f"Testing CLIP performance for query: {text_query}",
+            image_candidates=candidates,
+            exclude_images=[],
+            similarity_threshold=0.0  # Soft mode for testing
+        )
+        step4_time = (time.perf_counter() - step4_start) * 1000
+        
+        # Calculate total elapsed time
+        total_elapsed = time.perf_counter() - overall_start
+        total_ms = total_elapsed * 1000
+        
+        # Determine performance status
+        if total_elapsed < 5.0:
+            status = '✅ EXCELLENT'
+            performance_level = 'excellent'
+        elif total_elapsed < 10.0:
+            status = '✓ GOOD'
+            performance_level = 'good'
+        else:
+            status = '⚠️ SLOW'
+            performance_level = 'slow'
+        
+        print(f"\n{'='*70}")
+        print(f"⏱️  PERFORMANCE RESULTS: {status}")
+        print(f"{'='*70}")
+        print(f"Total time: {total_ms:.1f}ms ({total_elapsed:.2f}s)")
+        print(f"Target: <5000ms (5s)")
+        print(f"\nBreakdown:")
+        print(f"  - CLIP check: {step1_time:.1f}ms")
+        print(f"  - Fetch candidates: {step2_time:.1f}ms")
+        print(f"  - Prepare data: {step3_time:.1f}ms")
+        print(f"  - CLIP matching: {step4_time:.1f}ms")
+        print(f"{'='*70}\n")
+        
+        # Return detailed results
+        result = {
+            'success': True,
+            'query': text_query,
+            'performance': performance_level,
+            'status': status,
+            'elapsed_ms': total_ms,
+            'elapsed_sec': round(total_elapsed, 2),
+            'target_sec': 5.0,
+            'meets_target': total_elapsed < 5.0,
+            'timing': {
+                'clip_check_ms': round(step1_time, 1),
+                'fetch_candidates_ms': round(step2_time, 1),
+                'prepare_data_ms': round(step3_time, 1),
+                'clip_matching_ms': round(step4_time, 1),
+                'total_ms': round(total_ms, 1)
+            },
+            'candidates': {
+                'count': len(candidates),
+                'max_allowed': 6
+            }
+        }
+        
+        if best_image:
+            result['best_match'] = {
+                'url': best_image.get('url', '')[:100],
+                'similarity': best_image.get('_clip_similarity', 'N/A'),
+                'source': best_image.get('source', 'Unknown')
+            }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        total_elapsed = time.perf_counter() - overall_start
+        print(f"\n❌ TEST FAILED: {e}")
+        print(f"{'='*70}\n")
+        
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'elapsed_ms': total_elapsed * 1000
+        }), 500
 
 
 # Admin routes

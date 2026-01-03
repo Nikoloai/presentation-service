@@ -45,64 +45,138 @@ CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
 
 # ============================================================================
+# 🚨 CRITICAL CLIP INITIALIZATION - FORCED AT STARTUP
+# ============================================================================
+print("\n" + "="*70)
+print("🚨 CLIP DIAGNOSTIC STARTUP CHECK - FORCED INITIALIZATION")
+print("="*70)
+print("⚠️  CLIP will be loaded REGARDLESS of environment flags")
+print("   If CLIP fails to load, server will STOP with error\n")
+
+try:
+    # STEP 1: Check PyTorch
+    print("[1/5] Checking PyTorch...")
+    import torch
+    print(f"   ✅ PyTorch version: {torch.__version__}")
+    print(f"   ✅ CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"   ✅ CUDA version: {torch.version.cuda}")
+        print(f"   ✅ GPU device: {torch.cuda.get_device_name(0)}")
+        target_device = "CUDA"
+    else:
+        print(f"   ⚠️  CUDA not available, using CPU")
+        target_device = "CPU"
+    
+    # STEP 2: Check CLIP library
+    print("\n[2/5] Checking CLIP library...")
+    import clip
+    print(f"   ✅ CLIP library imported successfully")
+    
+    # STEP 3: Force load CLIP model
+    print(f"\n[3/5] 🔥 FORCING CLIP model load (ViT-B/32 on {target_device})...")
+    print("   This is MANDATORY - server will crash if this fails!")
+    
+    clip_load_start = time.perf_counter()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Import clip_client and force initialization
+    from services import clip_client
+    
+    # Force model load by calling internal function directly
+    print(f"   → Loading model to {device.upper()}...")
+    clip_client._device = device
+    model, preprocess = clip.load("ViT-B/32", device=device)
+    model.eval()
+    
+    # Set global variables
+    clip_client._clip_model = model
+    clip_client._clip_preprocess = preprocess
+    clip_client._clip_available = True
+    
+    clip_load_time = time.perf_counter() - clip_load_start
+    
+    print(f"   ✅ CLIP model loaded successfully!")
+    print(f"   ⏱️  Load time: {clip_load_time:.2f}s")
+    
+    # STEP 4: Load image cache
+    print("\n[4/5] Loading image embedding cache...")
+    clip_client._load_image_cache()
+    cache_size = len(clip_client._image_embedding_cache)
+    print(f"   ✅ Loaded {cache_size} cached embeddings")
+    
+    # STEP 5: Verify model is working
+    print("\n[5/5] Testing CLIP functionality...")
+    test_text = clip.tokenize(["test"]).to(device)
+    with torch.no_grad():
+        test_features = model.encode_text(test_text)
+    print(f"   ✅ CLIP is functional (test embedding: {test_features.shape})")
+    
+    # SUCCESS!
+    print("\n" + "="*70)
+    print("🎯 CLIP INITIALIZATION COMPLETE - ALL SYSTEMS GO!")
+    print("="*70)
+    print(f"   🧠 Model: ViT-B/32")
+    print(f"   💻 Device: {device.upper()}")
+    print(f"   📊 Embedding dim: 512")
+    print(f"   💾 Cached embeddings: {cache_size}")
+    print(f"   ⏱️  Total init time: {clip_load_time:.2f}s")
+    print("="*70 + "\n")
+    
+    # Set global flags
+    CLIP_AVAILABLE = True
+    CLIP_IMPORT_SUCCESS = True
+    
+except ImportError as e:
+    print("\n" + "="*70)
+    print("❌ CRITICAL ERROR: CLIP DEPENDENCIES NOT INSTALLED")
+    print("="*70)
+    print(f"Error: {e}\n")
+    print("Required dependencies:")
+    print("   pip install torch torchvision")
+    print("   pip install ftfy regex tqdm")
+    print("   pip install git+https://github.com/openai/CLIP.git")
+    print("\n" + "="*70)
+    print("🛑 SERVER STARTUP ABORTED - INSTALL DEPENDENCIES FIRST")
+    print("="*70 + "\n")
+    import sys
+    sys.exit(1)  # FORCE EXIT
+    
+except Exception as e:
+    print("\n" + "="*70)
+    print("❌ CRITICAL ERROR: CLIP INITIALIZATION FAILED")
+    print("="*70)
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error message: {e}\n")
+    print("Full traceback:")
+    print("─" * 70)
+    import traceback
+    traceback.print_exc()
+    print("─" * 70)
+    print("\n" + "="*70)
+    print("🛑 SERVER STARTUP ABORTED - FIX CLIP ERROR FIRST")
+    print("="*70 + "\n")
+    import sys
+    sys.exit(1)  # FORCE EXIT
+
+# ============================================================================
 # CLIP CONFIGURATION
 # ============================================================================
-# Read CLIP configuration from environment
-CLIP_ENABLED = os.getenv('CLIP_ENABLED', 'true').lower() in ('true', '1', 'yes')
+# CLIP is now ALWAYS enabled and loaded at startup (see above)
+# These variables are kept for compatibility but CLIP_AVAILABLE is always True
+
+CLIP_ENABLED = True  # Always true after forced initialization
 CLIP_SIMILARITY_THRESHOLD = float(os.getenv('CLIP_SIMILARITY_THRESHOLD', '0.30'))
 CLIP_MIN_CANDIDATES = int(os.getenv('CLIP_MIN_CANDIDATES', '8'))
 CLIP_MAX_CANDIDATES = int(os.getenv('CLIP_MAX_CANDIDATES', '20'))
 
 print("\n" + "="*70)
-print("🤖 CLIP CONFIGURATION")
+print("🤖 CLIP CONFIGURATION (Always Active)")
 print("="*70)
-print(f"CLIP_ENABLED (from env): {CLIP_ENABLED}")
+print(f"CLIP_ENABLED: True (forced at startup)")
+print(f"CLIP_AVAILABLE: {CLIP_AVAILABLE}")
 print(f"CLIP_SIMILARITY_THRESHOLD: {CLIP_SIMILARITY_THRESHOLD}")
 print(f"CLIP_MIN_CANDIDATES: {CLIP_MIN_CANDIDATES}")
 print(f"CLIP_MAX_CANDIDATES: {CLIP_MAX_CANDIDATES}")
-
-# Attempt to initialize CLIP if enabled
-CLIP_AVAILABLE = False
-if CLIP_ENABLED:
-    if not CLIP_IMPORT_SUCCESS:
-        print("❌ CLIP enabled but import failed - dependencies not installed")
-        print("   → Falling back to keyword search only")
-        CLIP_AVAILABLE = False
-    else:
-        print("🔄 FORCING CLIP initialization at startup...")
-        print("   (This ensures CLIP is ready before processing requests)\n")
-        try:
-            # FORCE initialization at startup (not lazy loading)
-            init_start = time.perf_counter()
-            clip_ready = is_clip_available()
-            init_time = time.perf_counter() - init_start
-            
-            if clip_ready:
-                CLIP_AVAILABLE = True
-                print(f"\n✅ CLIP READY in {init_time:.2f}s - All systems operational")
-            else:
-                print(f"\n❌ CLIP initialization failed after {init_time:.2f}s")
-                print("   → Check logs above for detailed error information")
-                print("   → Falling back to keyword search only")
-                CLIP_AVAILABLE = False
-                
-        except Exception as e:
-            print(f"\n❌ CLIP STARTUP FAILED")
-            print("="*70)
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {e}")
-            import traceback
-            print("\n📋 Full traceback:")
-            traceback.print_exc()
-            print("="*70)
-            print("\n   → Falling back to keyword search only")
-            CLIP_AVAILABLE = False
-else:
-    print("⚠️ CLIP disabled via CLIP_ENABLED=false")
-    print("   → Using keyword search only")
-    CLIP_AVAILABLE = False
-
-print(f"\n🎯 Final CLIP status: {'\u2705 ACTIVE' if CLIP_AVAILABLE else '❌ INACTIVE'}")
 print("="*70 + "\n")
 
 # ============================================================================
@@ -3871,6 +3945,43 @@ def create_presentation_api():
     Now includes payment status verification
     """
     try:
+        # ====================================================================
+        # 🧠 MANDATORY CLIP STATUS CHECK BEFORE GENERATION
+        # ====================================================================
+        print("\n" + "="*70)
+        print("🧠 CLIP STATUS PRE-FLIGHT CHECK")
+        print("="*70)
+        
+        if not CLIP_AVAILABLE:
+            print("❌ CRITICAL: CLIP not available - cannot generate presentation")
+            print("   This should never happen if server started correctly!")
+            print("="*70 + "\n")
+            return jsonify({
+                'error': 'CLIP service unavailable',
+                'message': 'Image matching service is not available. Please contact administrator.',
+                'clip_status': 'unavailable'
+            }), 500
+        
+        # Verify CLIP model is actually loaded
+        from services import clip_client
+        if clip_client._clip_model is None:
+            print("❌ CRITICAL: CLIP model is None - system in invalid state")
+            print("="*70 + "\n")
+            return jsonify({
+                'error': 'CLIP model not loaded',
+                'message': 'Image matching service failed to initialize. Please restart server.',
+                'clip_status': 'not_loaded'
+            }), 500
+        
+        print("✅ CLIP Status: READY")
+        print(f"   → Model: {clip_client._clip_model.__class__.__name__}")
+        print(f"   → Device: {clip_client._device}")
+        print(f"   → Cache size: {len(clip_client._image_embedding_cache)}")
+        print("="*70 + "\n")
+        
+        # ====================================================================
+        # Continue with normal request processing
+        # ====================================================================
         data = request.json
         topic = data.get('topic', '').strip()
         num_slides = data.get('num_slides', 5)
@@ -4144,9 +4255,13 @@ def test_clip():
         print(f"   → CLIP_AVAILABLE: {CLIP_AVAILABLE}")
         print(f"   → CLIP_IMPORT_SUCCESS: {CLIP_IMPORT_SUCCESS}")
         
+        # Import clip_client for detailed checks
+        from services import clip_client
+        
         if not CLIP_AVAILABLE:
-            error_msg = "CLIP NOT AVAILABLE - Check startup logs for errors"
+            error_msg = "CLIP NOT AVAILABLE - Server should have failed to start!"
             print(f"\n❌ {error_msg}")
+            print(f"   This is a CRITICAL ERROR - server should not be running!")
             return jsonify({
                 'success': False,
                 'error': error_msg,
@@ -4154,9 +4269,24 @@ def test_clip():
                 'diagnostics': {
                     'clip_enabled': CLIP_ENABLED,
                     'clip_available': CLIP_AVAILABLE,
-                    'clip_import_success': CLIP_IMPORT_SUCCESS
+                    'clip_import_success': CLIP_IMPORT_SUCCESS,
+                    'clip_model_loaded': clip_client._clip_model is not None
                 }
-            }), 503
+            }), 500
+        
+        # Verify model is actually loaded
+        if clip_client._clip_model is None:
+            error_msg = "CLIP model is None - system in invalid state"
+            print(f"\n❌ {error_msg}")
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'elapsed_ms': (time.perf_counter() - overall_start) * 1000,
+                'diagnostics': {
+                    'clip_available': CLIP_AVAILABLE,
+                    'clip_model_loaded': False
+                }
+            }), 500
         
         step1_time = (time.perf_counter() - step1_start) * 1000
         print(f"   ✅ CLIP is available and ready")

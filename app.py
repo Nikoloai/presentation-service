@@ -45,138 +45,152 @@ CORS(app)  # Enable CORS for cross-origin requests
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here-change-in-production')  # Needed for Flask-Login
 
 # ============================================================================
-# 🚨 CRITICAL CLIP INITIALIZATION - FORCED AT STARTUP
+# 🚨 CLIP INITIALIZATION - OPTIONAL FOR PRODUCTION
 # ============================================================================
-print("\n" + "="*70)
-print("🚨 CLIP DIAGNOSTIC STARTUP CHECK - FORCED INITIALIZATION")
-print("="*70)
-print("⚠️  CLIP will be loaded REGARDLESS of environment flags")
-print("   If CLIP fails to load, server will STOP with error\n")
+# For Railway deployment: CLIP dependencies are disabled to prevent crashes
+# For local development: Install CLIP dependencies and enable
 
-try:
-    # STEP 1: Check PyTorch
-    print("[1/5] Checking PyTorch...")
-    import torch
-    print(f"   ✅ PyTorch version: {torch.__version__}")
-    print(f"   ✅ CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"   ✅ CUDA version: {torch.version.cuda}")
-        print(f"   ✅ GPU device: {torch.cuda.get_device_name(0)}")
-        target_device = "CUDA"
-    else:
-        print(f"   ⚠️  CUDA not available, using CPU")
-        target_device = "CPU"
-    
-    # STEP 2: Check CLIP library
-    print("\n[2/5] Checking CLIP library...")
-    import clip
-    print(f"   ✅ CLIP library imported successfully")
-    
-    # STEP 3: Force load CLIP model
-    print(f"\n[3/5] 🔥 FORCING CLIP model load (ViT-B/32 on {target_device})...")
-    print("   This is MANDATORY - server will crash if this fails!")
-    
-    clip_load_start = time.perf_counter()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Import clip_client and force initialization
-    from services import clip_client
-    
-    # Force model load by calling internal function directly
-    print(f"   → Loading model to {device.upper()}...")
-    clip_client._device = device
-    model, preprocess = clip.load("ViT-B/32", device=device)
-    model.eval()
-    
-    # Set global variables
-    clip_client._clip_model = model
-    clip_client._clip_preprocess = preprocess
-    clip_client._clip_available = True
-    
-    clip_load_time = time.perf_counter() - clip_load_start
-    
-    print(f"   ✅ CLIP model loaded successfully!")
-    print(f"   ⏱️  Load time: {clip_load_time:.2f}s")
-    
-    # STEP 4: Load image cache
-    print("\n[4/5] Loading image embedding cache...")
-    clip_client._load_image_cache()
-    cache_size = len(clip_client._image_embedding_cache)
-    print(f"   ✅ Loaded {cache_size} cached embeddings")
-    
-    # STEP 5: Verify model is working
-    print("\n[5/5] Testing CLIP functionality...")
-    test_text = clip.tokenize(["test"]).to(device)
-    with torch.no_grad():
-        test_features = model.encode_text(test_text)
-    print(f"   ✅ CLIP is functional (test embedding: {test_features.shape})")
-    
-    # SUCCESS!
-    print("\n" + "="*70)
-    print("🎯 CLIP INITIALIZATION COMPLETE - ALL SYSTEMS GO!")
-    print("="*70)
-    print(f"   🧠 Model: ViT-B/32")
-    print(f"   💻 Device: {device.upper()}")
-    print(f"   📊 Embedding dim: 512")
-    print(f"   💾 Cached embeddings: {cache_size}")
-    print(f"   ⏱️  Total init time: {clip_load_time:.2f}s")
+IS_RAILWAY = os.getenv('RAILWAY_ENVIRONMENT') is not None
+CLIP_FORCE_DISABLE = os.getenv('CLIP_FORCE_DISABLE', 'false').lower() in ('true', '1', 'yes')
+
+print("\n" + "="*70)
+print("🔧 CLIP INITIALIZATION CHECK")
+print("="*70)
+print(f"Environment: {'Railway (Production)' if IS_RAILWAY else 'Local Development'}")
+print(f"CLIP Force Disable: {CLIP_FORCE_DISABLE}")
+
+if IS_RAILWAY or CLIP_FORCE_DISABLE:
+    print("\n⚠️  CLIP DISABLED for this environment")
+    print("   → Running in production mode without CLIP")
+    print("   → Image search will use keyword-based matching only")
     print("="*70 + "\n")
     
-    # Set global flags
-    CLIP_AVAILABLE = True
-    CLIP_IMPORT_SUCCESS = True
+    CLIP_AVAILABLE = False
+    CLIP_IMPORT_SUCCESS = False
     
-except ImportError as e:
-    print("\n" + "="*70)
-    print("❌ CRITICAL ERROR: CLIP DEPENDENCIES NOT INSTALLED")
-    print("="*70)
-    print(f"Error: {e}\n")
-    print("Required dependencies:")
-    print("   pip install torch torchvision")
-    print("   pip install ftfy regex tqdm")
-    print("   pip install git+https://github.com/openai/CLIP.git")
-    print("\n" + "="*70)
-    print("🛑 SERVER STARTUP ABORTED - INSTALL DEPENDENCIES FIRST")
-    print("="*70 + "\n")
-    import sys
-    sys.exit(1)  # FORCE EXIT
+else:
+    print("\n🔄 Attempting CLIP initialization...")
+    print("   (This may take a minute on first run)\n")
     
-except Exception as e:
-    print("\n" + "="*70)
-    print("❌ CRITICAL ERROR: CLIP INITIALIZATION FAILED")
-    print("="*70)
-    print(f"Error type: {type(e).__name__}")
-    print(f"Error message: {e}\n")
-    print("Full traceback:")
-    print("─" * 70)
-    import traceback
-    traceback.print_exc()
-    print("─" * 70)
-    print("\n" + "="*70)
-    print("🛑 SERVER STARTUP ABORTED - FIX CLIP ERROR FIRST")
-    print("="*70 + "\n")
-    import sys
-    sys.exit(1)  # FORCE EXIT
+    try:
+        # STEP 1: Check PyTorch
+        print("[1/5] Checking PyTorch...")
+        import torch
+        print(f"   ✅ PyTorch version: {torch.__version__}")
+        print(f"   ✅ CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"   ✅ CUDA version: {torch.version.cuda}")
+            print(f"   ✅ GPU device: {torch.cuda.get_device_name(0)}")
+            target_device = "CUDA"
+        else:
+            print(f"   ⚠️  CUDA not available, using CPU")
+            target_device = "CPU"
+        
+        # STEP 2: Check CLIP library
+        print("\n[2/5] Checking CLIP library...")
+        import clip
+        print(f"   ✅ CLIP library imported successfully")
+        
+        # STEP 3: Force load CLIP model
+        print(f"\n[3/5] 🔥 Loading CLIP model (ViT-B/32 on {target_device})...")
+        
+        clip_load_start = time.perf_counter()
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Import clip_client and force initialization
+        from services import clip_client
+        
+        # Force model load
+        print(f"   → Loading model to {device.upper()}...")
+        clip_client._device = device
+        model, preprocess = clip.load("ViT-B/32", device=device)
+        model.eval()
+        
+        # Set global variables
+        clip_client._clip_model = model
+        clip_client._clip_preprocess = preprocess
+        clip_client._clip_available = True
+        
+        clip_load_time = time.perf_counter() - clip_load_start
+        
+        print(f"   ✅ CLIP model loaded successfully!")
+        print(f"   ⏱️  Load time: {clip_load_time:.2f}s")
+        
+        # STEP 4: Load image cache
+        print("\n[4/5] Loading image embedding cache...")
+        clip_client._load_image_cache()
+        cache_size = len(clip_client._image_embedding_cache)
+        print(f"   ✅ Loaded {cache_size} cached embeddings")
+        
+        # STEP 5: Verify model is working
+        print("\n[5/5] Testing CLIP functionality...")
+        test_text = clip.tokenize(["test"]).to(device)
+        with torch.no_grad():
+            test_features = model.encode_text(test_text)
+        print(f"   ✅ CLIP is functional (test embedding: {test_features.shape})")
+        
+        # SUCCESS!
+        print("\n" + "="*70)
+        print("🎯 CLIP INITIALIZATION COMPLETE - ALL SYSTEMS GO!")
+        print("="*70)
+        print(f"   🧠 Model: ViT-B/32")
+        print(f"   💻 Device: {device.upper()}")
+        print(f"   📊 Embedding dim: 512")
+        print(f"   💾 Cached embeddings: {cache_size}")
+        print(f"   ⏱️  Total init time: {clip_load_time:.2f}s")
+        print("="*70 + "\n")
+        
+        # Set global flags
+        CLIP_AVAILABLE = True
+        CLIP_IMPORT_SUCCESS = True
+        
+    except ImportError as e:
+        print("\n" + "="*70)
+        print("⚠️  CLIP DEPENDENCIES NOT AVAILABLE")
+        print("="*70)
+        print(f"Import Error: {e}\n")
+        print("→ Running without CLIP (keyword-based image search only)")
+        print("→ For CLIP support, install: torch, torchvision, sentence-transformers")
+        print("="*70 + "\n")
+        
+        CLIP_AVAILABLE = False
+        CLIP_IMPORT_SUCCESS = False
+        
+    except Exception as e:
+        print("\n" + "="*70)
+        print("⚠️  CLIP INITIALIZATION FAILED")
+        print("="*70)
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {e}\n")
+        print("Full traceback:")
+        print("─" * 70)
+        import traceback
+        traceback.print_exc()
+        print("─" * 70)
+        print("\n→ Running without CLIP (keyword-based image search only)")
+        print("="*70 + "\n")
+        
+        CLIP_AVAILABLE = False
+        CLIP_IMPORT_SUCCESS = False
 
 # ============================================================================
 # CLIP CONFIGURATION
 # ============================================================================
-# CLIP is now ALWAYS enabled and loaded at startup (see above)
-# These variables are kept for compatibility but CLIP_AVAILABLE is always True
-
-CLIP_ENABLED = True  # Always true after forced initialization
+CLIP_ENABLED = CLIP_AVAILABLE  # Based on initialization result
 CLIP_SIMILARITY_THRESHOLD = float(os.getenv('CLIP_SIMILARITY_THRESHOLD', '0.30'))
 CLIP_MIN_CANDIDATES = int(os.getenv('CLIP_MIN_CANDIDATES', '8'))
 CLIP_MAX_CANDIDATES = int(os.getenv('CLIP_MAX_CANDIDATES', '20'))
 
 print("\n" + "="*70)
-print("🤖 CLIP CONFIGURATION (Always Active)")
+print("🤖 CLIP CONFIGURATION")
 print("="*70)
-print(f"CLIP_ENABLED: True (forced at startup)")
+print(f"CLIP_ENABLED: {CLIP_ENABLED}")
 print(f"CLIP_AVAILABLE: {CLIP_AVAILABLE}")
 print(f"CLIP_SIMILARITY_THRESHOLD: {CLIP_SIMILARITY_THRESHOLD}")
 print(f"CLIP_MIN_CANDIDATES: {CLIP_MIN_CANDIDATES}")
 print(f"CLIP_MAX_CANDIDATES: {CLIP_MAX_CANDIDATES}")
+if not CLIP_AVAILABLE:
+    print("\n⚠️  Image search will use keyword-based matching only")
 print("="*70 + "\n")
 
 # ============================================================================
@@ -4384,6 +4398,37 @@ def get_presentation_types():
         'success': True,
         'types': PRESENTATION_TYPES
     })
+
+
+@app.route('/health', methods=['GET'])
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """
+    Health check endpoint for Railway deployment monitoring.
+    Returns service status and configuration info.
+    """
+    import sys
+    
+    health_data = {
+        'status': 'ok',
+        'timestamp': datetime.now().isoformat(),
+        'environment': 'railway' if IS_RAILWAY else 'local',
+        'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        'services': {
+            'clip': 'enabled' if CLIP_AVAILABLE else 'disabled',
+            'openai': 'configured' if OPENAI_API_KEY else 'missing',
+            'pexels': 'configured' if PEXELS_API_KEY else 'missing',
+            'firebase': 'configured' if os.getenv('FIREBASE_CREDENTIALS') else 'missing',
+            'stripe': 'configured' if STRIPE_SECRET_KEY else 'missing'
+        },
+        'features': {
+            'image_search': 'clip+keyword' if CLIP_AVAILABLE else 'keyword-only',
+            'translation': TRANSLATION_ENABLED,
+            'payments': PAYMENTS_ENABLED
+        }
+    }
+    
+    return jsonify(health_data), 200
 
 
 @app.route('/api/test-clip', methods=['GET'])

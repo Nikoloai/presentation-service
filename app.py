@@ -3356,6 +3356,37 @@ PRESENTATION_THEMES = {
         'icon_color': RGBColor(74, 85, 104),
         'style': 'minimal_clean',
         'metaphor_percentage': 10  # Only 10% metaphorical images
+    },
+    'wisdom_hybrid': {
+        # WISDOM_HYBRID: Elegant typography with strategic image placement
+        # 5 slide types: Full-Screen Cover, Full Text, Text+Image, List+Metaphor, Text+2Images
+        'background': RGBColor(255, 255, 255),  # Pure white #FFFFFF
+        'title_slide_bg': RGBColor(0, 0, 0),  # Black for full-screen overlay
+        'content_slide_bg': RGBColor(255, 255, 255),  # White for content
+        'title_color_first_last': RGBColor(255, 255, 255),  # White on dark overlay
+        'title_color_content': RGBColor(26, 32, 44),  # #1A202C - Almost black
+        'content_color_first_last': RGBColor(255, 255, 255),  # White
+        'content_color_content': RGBColor(26, 32, 44),  # #1A202C - Black text
+        'subtitle_color': RGBColor(71, 85, 105),  # #475569 - Secondary gray
+        'muted_color': RGBColor(148, 163, 184),  # #94A3B8 - Muted gray
+        'accent_color': RGBColor(2, 132, 199),  # #0284C7 - Blue for icons
+        'overlay_color': (0, 0, 0, 0.4),  # 40% dark overlay for cover images
+        'style': 'wisdom_hybrid',
+        'font_heading': 'Georgia',  # Serif for elegance
+        'font_body': 'Georgia',
+        'text_size_cover_title': Pt(56),  # 3.5rem = 56pt
+        'text_size_cover_subtitle': Pt(24),  # 1.5rem = 24pt
+        'text_size_heading': Pt(40),  # 2.5rem = 40pt
+        'text_size_subheading': Pt(36),  # 2.25rem = 36pt
+        'text_size_body': Pt(18),  # 1.125rem = 18pt
+        'text_size_quote': Pt(20),  # 1.25rem = 20pt
+        'line_height': 1.8,
+        'padding': Inches(4),  # 64px = 4rem
+        'gap': Inches(2),  # 32px gap between left/right
+        'left_width_percent': 60,  # 60% for text
+        'right_width_percent': 40,  # 40% for images
+        'icon_size': 32,  # 32px icons
+        'image_grayscale': True  # B&W images on right side
     }
 }
 
@@ -3546,6 +3577,59 @@ def should_use_metaphorical_image(slide_index: int, total_slides: int, slide_tit
     
     # No specific metaphor match, but slide was selected - use generic inspiring image
     return False, None
+
+
+def determine_wisdom_slide_type(slide_index: int, total_slides: int, content_length: int) -> str:
+    """
+    Determine which WISDOM_HYBRID slide type to use based on position and content.
+    
+    Returns one of: 'cover', 'full_text', 'text_image', 'list_metaphor', 'text_two_images'
+    """
+    # First slide is always cover
+    if slide_index == 0:
+        return 'cover'
+    
+    # Distribute slide types based on position
+    # Flow: Cover → Full Text (2-3) → List (1-2) → Text+Image (2-4) → Text+2Images (2-3) → Quote
+    position_percent = (slide_index / total_slides) * 100
+    
+    if position_percent < 20:  # Early slides (after cover)
+        return 'full_text'
+    elif position_percent < 35:  # Early-mid
+        return 'list_metaphor'
+    elif position_percent < 70:  # Mid slides
+        return 'text_image' if slide_index % 2 == 0 else 'list_metaphor'
+    elif position_percent < 90:  # Late slides
+        return 'text_two_images' if content_length > 150 else 'text_image'
+    else:  # Final slides
+        return 'full_text'  # Quote or conclusion
+
+
+def apply_grayscale_to_image(image_data_io):
+    """
+    Convert image to grayscale (B&W) using PIL.
+    Returns BytesIO object with grayscale image.
+    """
+    try:
+        from PIL import Image
+        
+        # Open image from BytesIO
+        image_data_io.seek(0)
+        img = Image.open(image_data_io)
+        
+        # Convert to grayscale
+        grayscale_img = img.convert('L')
+        
+        # Save back to BytesIO
+        output = io.BytesIO()
+        grayscale_img.save(output, format='JPEG', quality=85)
+        output.seek(0)
+        
+        return output
+    except Exception as e:
+        print(f"  ⚠️ Grayscale conversion failed: {e}, using original")
+        image_data_io.seek(0)
+        return image_data_io
 
 
 def create_presentation(topic, slides_data, theme='light', presentation_type='business', user_id=None):

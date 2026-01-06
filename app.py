@@ -3264,16 +3264,6 @@ PRESENTATION_THEMES = {
         'content_color_content': RGBColor(255, 255, 255),
         'accent_color': RGBColor(255, 0, 255)
     },
-    'minimal': {
-        'background': RGBColor(255, 255, 255),
-        'title_slide_bg': RGBColor(0, 0, 0),
-        'content_slide_bg': RGBColor(255, 255, 255),
-        'title_color_first_last': RGBColor(255, 255, 255),
-        'title_color_content': RGBColor(0, 0, 0),
-        'content_color_first_last': RGBColor(255, 255, 255),
-        'content_color_content': RGBColor(0, 0, 0),
-        'accent_color': RGBColor(102, 102, 102)
-    },
     'gradient': {
         'background': RGBColor(254, 249, 255),
         'title_slide_bg': RGBColor(79, 30, 85),
@@ -3323,6 +3313,35 @@ PRESENTATION_THEMES = {
         'content_color_first_last': RGBColor(255, 255, 255),
         'content_color_content': RGBColor(15, 23, 42),
         'accent_color': RGBColor(14, 165, 233)
+    },
+    'heroic': {
+        # HEROIC_MINIMAL: Clean minimalist design with strategic metaphors
+        'background': RGBColor(255, 255, 255),  # Pure white
+        'title_slide_bg': RGBColor(45, 55, 72),  # #2D3748 - Dark slate for title
+        'content_slide_bg': RGBColor(255, 255, 255),  # White for content
+        'title_color_first_last': RGBColor(255, 255, 255),  # White on dark
+        'title_color_content': RGBColor(26, 32, 44),  # #1A202C - Almost black
+        'content_color_first_last': RGBColor(255, 255, 255),  # White
+        'content_color_content': RGBColor(26, 32, 44),  # #1A202C
+        'accent_color': RGBColor(66, 153, 225),  # #4299E1 - Blue accent
+        'icon_color': RGBColor(74, 85, 104),  # #4A5568 - Gray for icons
+        'metaphor_overlay_color': RGBColor(45, 55, 72),  # #2D3748
+        'style': 'heroic_minimal',  # Special flag
+        'metaphor_percentage': 40  # 40% slides get metaphorical images
+    },
+    'minimal': {
+        # Updated MINIMAL: Even cleaner with more air
+        'background': RGBColor(248, 250, 252),  # #F8FAFC - Soft white
+        'title_slide_bg': RGBColor(0, 0, 0),  # Pure black
+        'content_slide_bg': RGBColor(248, 250, 252),  # Soft white
+        'title_color_first_last': RGBColor(255, 255, 255),
+        'title_color_content': RGBColor(26, 32, 44),  # #1A202C
+        'content_color_first_last': RGBColor(255, 255, 255),
+        'content_color_content': RGBColor(26, 32, 44),
+        'accent_color': RGBColor(74, 85, 104),  # #4A5568 - Subtle gray
+        'icon_color': RGBColor(74, 85, 104),
+        'style': 'minimal_clean',
+        'metaphor_percentage': 10  # Only 10% metaphorical images
     }
 }
 
@@ -3365,6 +3384,154 @@ def filter_quiz_and_assessment_slides(slides_data):
             filtered.append(slide)
     
     return filtered, removed
+
+
+def get_icon_unicode_for_slide(slide_title: str, slide_content: str) -> str:
+    """
+    Select appropriate line-style icon (Unicode) based on slide content.
+    Returns Unicode character for thin line icons (Heroicons/Feather style).
+    
+    Icon Categories:
+    - Idea/Goal: 💡 (lightbulb), 🧭 (compass)
+    - Process: ⚙️ (gear), ➡️ (arrow)
+    - Comparison: ⚖️ (scales), 📊 (chart)
+    - Success: 🏆 (trophy), 📈 (growth)
+    - Warning: ⚠️ (warning)
+    - Information: ℹ️ (info), 📝 (document)
+    - Target: 🎯 (target)
+    - Time: ⏱️ (stopwatch), 📅 (calendar)
+    - People: 👥 (users), 🤝 (handshake)
+    - Tools: 🔧 (wrench), 🛠️ (tools)
+    - Security: 🔒 (lock), 🛡️ (shield)
+    - Communication: 💬 (speech), 📧 (email)
+    """
+    combined_text = (slide_title + " " + slide_content).lower()
+    
+    # Idea/Innovation/Goal/Vision
+    if any(word in combined_text for word in ['idea', 'innovation', 'vision', 'идея', 'инновация', 'визия', 'creative', 'творческий']):
+        return "💡"  # Lightbulb
+    
+    # Direction/Strategy/Goal/Compass
+    if any(word in combined_text for word in ['direction', 'strategy', 'goal', 'compass', 'navigate', 'направление', 'стратегия', 'цель', 'навигация']):
+        return "🧭"  # Compass
+    
+    # Target/Focus/Objective
+    if any(word in combined_text for word in ['target', 'focus', 'objective', 'aim', 'цель', 'фокус', 'задача']):
+        return "🎯"  # Target
+    
+    # Process/System/Mechanism/Work
+    if any(word in combined_text for word in ['process', 'system', 'mechanism', 'workflow', 'operation', 'процесс', 'система', 'механизм', 'работа']):
+        return "⚙️"  # Gear
+    
+    # Growth/Success/Achievement/Increase
+    if any(word in combined_text for word in ['growth', 'increase', 'success', 'achievement', 'improve', 'рост', 'успех', 'достижение', 'увеличение']):
+        return "📈"  # Growth chart
+    
+    # Award/Trophy/Win/Victory
+    if any(word in combined_text for word in ['award', 'trophy', 'win', 'victory', 'champion', 'награда', 'победа', 'чемпион']):
+        return "🏆"  # Trophy
+    
+    # Comparison/Analysis/Balance
+    if any(word in combined_text for word in ['compare', 'comparison', 'balance', 'versus', 'analysis', 'сравнение', 'анализ', 'баланс']):
+        return "⚖️"  # Scales
+    
+    # Data/Chart/Statistics/Metrics
+    if any(word in combined_text for word in ['data', 'chart', 'statistics', 'metrics', 'analytics', 'данные', 'статистика', 'метрики']):
+        return "📊"  # Bar chart
+    
+    # Warning/Risk/Alert/Danger
+    if any(word in combined_text for word in ['warning', 'risk', 'alert', 'danger', 'caution', 'предупреждение', 'риск', 'опасность']):
+        return "⚠️"  # Warning
+    
+    # Time/Schedule/Deadline
+    if any(word in combined_text for word in ['time', 'schedule', 'deadline', 'timeline', 'время', 'график', 'срок']):
+        return "⏱️"  # Stopwatch
+    
+    # Calendar/Date/Event/Plan
+    if any(word in combined_text for word in ['calendar', 'date', 'event', 'plan', 'schedule', 'календарь', 'дата', 'событие', 'план']):
+        return "📅"  # Calendar
+    
+    # Team/People/Collaboration/Users
+    if any(word in combined_text for word in ['team', 'people', 'collaboration', 'users', 'group', 'команда', 'люди', 'сотрудничество']):
+        return "👥"  # Users
+    
+    # Partnership/Agreement/Handshake
+    if any(word in combined_text for word in ['partnership', 'agreement', 'cooperation', 'alliance', 'партнерство', 'соглашение', 'сотрудничество']):
+        return "🤝"  # Handshake
+    
+    # Tools/Build/Development
+    if any(word in combined_text for word in ['tool', 'build', 'development', 'construct', 'инструмент', 'создание', 'разработка']):
+        return "🔧"  # Wrench
+    
+    # Security/Protection/Safe
+    if any(word in combined_text for word in ['security', 'protection', 'safe', 'secure', 'protect', 'безопасность', 'защита']):
+        return "🔒"  # Lock
+    
+    # Communication/Message/Discussion
+    if any(word in combined_text for word in ['communication', 'message', 'discussion', 'talk', 'коммуникация', 'сообщение', 'обсуждение']):
+        return "💬"  # Speech bubble
+    
+    # Document/File/Report
+    if any(word in combined_text for word in ['document', 'file', 'report', 'paper', 'документ', 'файл', 'отчет']):
+        return "📝"  # Document
+    
+    # Default: Info icon
+    return "ℹ️"  # Info
+
+
+def should_use_metaphorical_image(slide_index: int, total_slides: int, slide_title: str, slide_content: str, metaphor_percentage: int) -> tuple[bool, str | None]:
+    """
+    Determine if a slide should use metaphorical image instead of icon.
+    Returns: (use_metaphor, metaphor_keyword)
+    
+    Metaphorical images for key moments:
+    - Compass: direction, strategy, navigation
+    - Phoenix: rebirth, transformation, renewal
+    - Door: opportunity, opening, entrance, beginning
+    - Road: journey, path, progress
+    - Fire: passion, energy, transformation
+    - Mountain: challenge, achievement, peak
+    - Bridge: connection, transition, crossing
+    - Lighthouse: guidance, vision, clarity
+    - Sunrise: beginning, hope, new start
+    - Keys: solution, access, unlock
+    """
+    combined_text = (slide_title + " " + slide_content).lower()
+    
+    # Calculate if this slide should get a metaphor based on percentage
+    # Key slides (first, last, middle) have higher priority
+    is_key_slide = (slide_index == 0 or slide_index == total_slides - 1 or slide_index == total_slides // 2)
+    
+    # Threshold calculation: key slides more likely to get metaphors
+    if is_key_slide:
+        should_get_metaphor = (slide_index % max(1, int(100 / (metaphor_percentage * 1.5)))) == 0
+    else:
+        should_get_metaphor = (slide_index % max(1, int(100 / metaphor_percentage))) == 0
+    
+    if not should_get_metaphor:
+        return False, None
+    
+    # Check for metaphorical keywords
+    metaphor_map = {
+        'compass': ['direction', 'strategy', 'navigate', 'path', 'way', 'course', 'направление', 'стратегия', 'навигация', 'путь'],
+        'phoenix fire': ['rebirth', 'transformation', 'renewal', 'rise', 'resurrect', 'возрождение', 'трансформация', 'обновление'],
+        'open door opportunity': ['opportunity', 'opening', 'entrance', 'beginning', 'start', 'door', 'возможность', 'начало', 'вход'],
+        'road journey path': ['journey', 'road', 'progress', 'ahead', 'forward', 'путешествие', 'дорога', 'прогресс', 'вперед'],
+        'bonfire flames': ['passion', 'energy', 'fire', 'burn', 'ignite', 'страсть', 'энергия', 'огонь'],
+        'mountain peak summit': ['challenge', 'achievement', 'peak', 'summit', 'climb', 'overcome', 'вызов', 'достижение', 'вершина'],
+        'bridge connection': ['connection', 'bridge', 'link', 'connect', 'transition', 'связь', 'мост', 'переход'],
+        'lighthouse guidance': ['guidance', 'vision', 'clarity', 'light', 'beacon', 'руководство', 'визия', 'ясность'],
+        'sunrise dawn': ['beginning', 'hope', 'new', 'dawn', 'start', 'morning', 'начало', 'надежда', 'рассвет'],
+        'golden key solution': ['solution', 'key', 'unlock', 'access', 'answer', 'решение', 'ключ', 'ответ']
+    }
+    
+    # Find matching metaphor
+    for metaphor_query, keywords in metaphor_map.items():
+        if any(keyword in combined_text for keyword in keywords):
+            return True, metaphor_query
+    
+    # No specific metaphor match, but slide was selected - use generic inspiring image
+    return False, None
 
 
 def create_presentation(topic, slides_data, theme='light', presentation_type='business', user_id=None):
